@@ -4,104 +4,368 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sistem Jadwal Puskesmas Geyer 2</title>
+  <meta name="theme-color" content="#087f5b">
+  <title>Sistem Jadwal | UPTD Puskesmas Geyer 2</title>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
   <style>
-    * { box-sizing: border-box; }
+    * {
+      box-sizing: border-box;
+    }
+
+    :root {
+      --green: #087f5b;
+      --green-dark: #056448;
+      --text: #172b43;
+    }
+
     body {
       margin: 0;
-      font-family: Arial, sans-serif;
-      background: #f1f5f9;
-      color: #1e293b;
+      min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--text);
+      background: #edf5f7;
     }
-    header {
-      background: #087f5b;
-      color: white;
-      padding: 20px;
+
+    /* BAGIAN HEADER */
+    .hero {
+      position: relative;
+      overflow: hidden;
+      min-height: 285px;
+      padding: 24px 16px 25px;
       text-align: center;
+      color: white;
+      background:
+        radial-gradient(ellipse at 50% -80%, #42b994 0%, transparent 70%),
+        linear-gradient(135deg, #087f5b, #056448);
+      border-radius: 0 0 9% 9% / 0 0 12% 12%;
     }
-    main {
-      width: min(440px, 92%);
-      margin: 32px auto;
+
+    .hero::before,
+    .hero::after {
+      content: "";
+      position: absolute;
+      pointer-events: none;
+      width: 42%;
+      height: 125%;
+      top: -30%;
+      border: 30px solid rgba(255,255,255,.13);
+      border-radius: 0 0 100% 0;
+      transform: rotate(-12deg);
     }
+
+    .hero::before {
+      left: -19%;
+    }
+
+    .hero::after {
+      right: -19%;
+      transform: scaleX(-1) rotate(-12deg);
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 1;
+    }
+
+    .logo {
+      display: block;
+      width: 105px;
+      height: 105px;
+      object-fit: contain;
+      margin: 0 auto 8px;
+      filter: drop-shadow(0 3px 5px rgba(0,0,0,.12));
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 5vw, 44px);
+      line-height: 1.15;
+      font-weight: 800;
+      letter-spacing: .3px;
+    }
+
+    .institution {
+      margin-top: 8px;
+      font-size: clamp(19px, 3.2vw, 29px);
+      line-height: 1.3;
+      font-weight: 800;
+      letter-spacing: .5px;
+    }
+
+    /* LATAR BELAKANG FOTO PUSKESMAS */
+    .page-background {
+      position: relative;
+      isolation: isolate;
+      min-height: calc(100vh - 285px);
+      padding: 30px 16px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background-image:
+        linear-gradient(
+          rgba(239, 248, 250, .73),
+          rgba(239, 248, 250, .80)
+        ),
+        url("https://i.ibb.co/qYWRwX3N/Halaman-Depan-PKM-Geyer-2.jpg");
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+    }
+
+    /* KARTU LOGIN */
     .card {
-      background: white;
-      padding: 24px;
-      border-radius: 14px;
-      box-shadow: 0 4px 18px #0000000d;
+      width: min(100%, 575px);
+      padding: 32px 38px;
+      background: rgba(255,255,255,.96);
+      border: 1px solid rgba(255,255,255,.9);
+      border-radius: 19px;
+      box-shadow: 0 10px 32px rgba(23, 55, 68, .15);
+      backdrop-filter: blur(5px);
     }
-    h2 { margin-top: 0; }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 29px;
+      line-height: 1.2;
+      font-weight: 800;
+    }
+
+    .muted {
+      margin: 0 0 18px;
+      color: #607187;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+
     label {
       display: block;
-      margin: 14px 0 6px;
-      font-size: 14px;
-      font-weight: bold;
+      margin: 15px 0 7px;
+      font-size: 16px;
+      font-weight: 700;
     }
-    input, button {
-      width: 100%;
-      padding: 12px;
-      border-radius: 8px;
-      font-size: 15px;
-    }
+
     input {
-      border: 1px solid #cbd5e1;
+      display: block;
+      width: 100%;
+      min-height: 53px;
+      padding: 13px 15px;
+      border: 1px solid #cbd7e3;
+      border-radius: 11px;
+      outline: none;
+      background: #fff;
+      color: #172b43;
+      font-family: inherit;
+      font-size: 16px;
+      transition: border-color .2s, box-shadow .2s;
     }
-    button {
+
+    input:focus {
+      border-color: var(--green);
+      box-shadow: 0 0 0 3px rgba(8,127,91,.12);
+    }
+
+    .password-wrap {
+      position: relative;
+    }
+
+    .password-wrap input {
+      padding-right: 78px;
+    }
+
+    .toggle-password {
+      position: absolute;
+      right: 7px;
+      top: 7px;
+      width: auto;
+      min-height: 39px;
+      margin: 0;
+      padding: 7px 10px;
       border: 0;
-      background: #087f5b;
-      color: white;
-      font-weight: bold;
-      cursor: pointer;
-      margin-top: 16px;
+      background: #edf7f3;
+      color: var(--green-dark);
+      font-size: 12px;
+      font-weight: 700;
     }
-    button.secondary { background: #475569; }
-    #message {
-      margin-top: 14px;
+
+    button {
+      width: 100%;
+      min-height: 55px;
+      margin-top: 22px;
+      padding: 14px 18px;
+      border: 0;
+      border-radius: 11px;
+      background: linear-gradient(100deg, #07865f, #087f5b);
+      color: white;
+      font-family: inherit;
+      font-size: 18px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: filter .2s, transform .2s;
+    }
+
+    button:hover {
+      filter: brightness(.94);
+    }
+
+    button:active {
+      transform: scale(.99);
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: .7;
+    }
+
+    button.secondary {
+      background: #475569;
+    }
+
+    #message,
+    #dashboardMessage {
+      margin-top: 15px;
       font-size: 14px;
       line-height: 1.5;
       overflow-wrap: anywhere;
     }
-    .hidden { display: none; }
-    .muted { color: #64748b; font-size: 14px; }
+
+    .footer {
+      margin-top: auto;
+      padding: 25px 8px 0;
+      text-align: center;
+      line-height: 1.6;
+      color: #334b61;
+    }
+
+    .footer strong {
+      display: block;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .footer span {
+      font-size: 14px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 600px) {
+      .hero {
+        min-height: 235px;
+        padding-top: 20px;
+      }
+
+      .logo {
+        width: 82px;
+        height: 82px;
+      }
+
+      .page-background {
+        min-height: calc(100vh - 235px);
+        padding: 24px 14px;
+      }
+
+      .card {
+        padding: 25px 21px;
+        border-radius: 16px;
+      }
+
+      h2 {
+        font-size: 25px;
+      }
+
+      .institution {
+        letter-spacing: 0;
+      }
+
+      .footer {
+        padding-top: 24px;
+      }
+    }
   </style>
 </head>
+
 <body>
-  <header>
-    <h1>Sistem Jadwal</h1>
-    <div>UPTD Puskesmas Geyer 2</div>
+  <header class="hero">
+    <div class="hero-content">
+      <img
+        class="logo"
+        src="https://i.ibb.co.com/5Xn1TKNP/Logo-Puskesmas-Geyer-2.png"
+        alt="Logo UPTD Puskesmas Geyer 2"
+      >
+
+      <h1>Sistem Jadwal</h1>
+      <div class="institution">UPTD PUSKESMAS GEYER 2</div>
+    </div>
   </header>
 
-  <main>
+  <main class="page-background">
     <section id="loginCard" class="card">
       <h2>Login Pengguna</h2>
-      <p class="muted">Masuk menggunakan akun yang telah didaftarkan administrator.</p>
+      <p class="muted">
+        Masuk menggunakan akun yang telah didaftarkan administrator.
+      </p>
 
       <form id="loginForm">
         <label for="email">Email</label>
-        <input id="email" type="email" autocomplete="username"
-          required placeholder="Masukkan email">
+        <input
+          id="email"
+          type="email"
+          autocomplete="username"
+          required
+          placeholder="Masukkan email"
+        >
 
         <label for="password">Password</label>
-        <input id="password" type="password"
-          autocomplete="current-password" required placeholder="Masukkan password">
+        <div class="password-wrap">
+          <input
+            id="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            placeholder="Masukkan password"
+          >
+          <button
+            type="button"
+            id="togglePassword"
+            class="toggle-password"
+          >Lihat</button>
+        </div>
 
-        <button type="submit">Masuk</button>
+        <button id="loginButton" type="submit">Masuk</button>
       </form>
-      <div id="message" role="status"></div>
+
+      <div id="message" role="status" aria-live="polite"></div>
     </section>
 
     <section id="dashboardCard" class="card hidden">
       <h2>Dashboard</h2>
       <p id="welcome"></p>
-      <p class="muted">Login berhasil. Berikutnya kita akan menambahkan kalender dan pengelolaan jadwal.</p>
-      <button id="logoutButton" class="secondary">Keluar</button>
+      <p class="muted">
+        Login berhasil. Berikutnya kita akan menambahkan kalender
+        dan pengelolaan jadwal.
+      </p>
+      <button id="logoutButton" class="secondary" type="button">
+        Keluar
+      </button>
       <div id="dashboardMessage" role="status"></div>
     </section>
+
+    <footer class="footer">
+      <strong>UPTD Puskesmas Geyer 2</strong>
+      <span>Melayani dengan Profesional, Peduli untuk Masyarakat</span>
+    </footer>
   </main>
 
   <script>
-    const SUPABASE_URL = "https://xqeuklqhkslfvhqrhyyr.supabase.co";
-    const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_2hvrRkMS3sZ9CvyHHNdgFA_vsKJj8Mn";
+    const SUPABASE_URL =
+      "https://xqeuklqhkslfvhqrhyyr.supabase.co";
+
+    const SUPABASE_PUBLISHABLE_KEY =
+      "sb_publishable_2hvrRkMS3sZ9CvyHHNdgFA_vsKJj8Mn";
 
     const client = window.supabase.createClient(
       SUPABASE_URL,
@@ -110,10 +374,17 @@
 
     const loginCard = document.getElementById("loginCard");
     const dashboardCard = document.getElementById("dashboardCard");
+    const loginForm = document.getElementById("loginForm");
+    const loginButton = document.getElementById("loginButton");
     const message = document.getElementById("message");
-    const dashboardMessage = document.getElementById("dashboardMessage");
+    const dashboardMessage =
+      document.getElementById("dashboardMessage");
+
+    let sessionCheckId = 0;
 
     async function showSession(session) {
+      const checkId = ++sessionCheckId;
+
       if (!session) {
         loginCard.classList.remove("hidden");
         dashboardCard.classList.add("hidden");
@@ -126,10 +397,12 @@
         .eq("id", session.user.id)
         .maybeSingle();
 
+      if (checkId !== sessionCheckId) return;
+
       if (error || !data || !data.is_active) {
         await client.auth.signOut();
         message.textContent =
-          "Profil pengguna belum tersedia atau akun belum aktif. Hubungi administrator.";
+          "Profil belum tersedia atau akun belum aktif. Hubungi administrator.";
         loginCard.classList.remove("hidden");
         dashboardCard.classList.add("hidden");
         return;
@@ -137,18 +410,32 @@
 
       loginCard.classList.add("hidden");
       dashboardCard.classList.remove("hidden");
+
       document.getElementById("welcome").textContent =
-        "Selamat datang, " + data.full_name + " (" + data.role + ").";
+        "Selamat datang, " + data.full_name +
+        " (" + data.role + ").";
     }
 
-    document.getElementById("loginForm").addEventListener("submit",
-      async function (event) {
-        event.preventDefault();
-        message.textContent = "Memeriksa akun...";
+    document.getElementById("togglePassword")
+      .addEventListener("click", function () {
+        const password = document.getElementById("password");
+        const isHidden = password.type === "password";
 
-        const email = document.getElementById("email").value.trim();
-        const password = document.getElementById("password").value;
+        password.type = isHidden ? "text" : "password";
+        this.textContent = isHidden ? "Sembunyikan" : "Lihat";
+      });
 
+    loginForm.addEventListener("submit", async function (event) {
+      event.preventDefault();
+
+      loginButton.disabled = true;
+      loginButton.textContent = "Memeriksa akun...";
+      message.textContent = "";
+
+      const email = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+
+      try {
         const { data, error } = await client.auth.signInWithPassword({
           email,
           password
@@ -162,27 +449,42 @@
 
         message.textContent = "";
         await showSession(data.session);
+      } catch (error) {
+        message.textContent =
+          "Koneksi bermasalah. Periksa internet lalu coba lagi.";
+      } finally {
+        loginButton.disabled = false;
+        loginButton.textContent = "Masuk";
       }
-    );
+    });
 
-    document.getElementById("logoutButton").addEventListener("click",
-      async function () {
+    document.getElementById("logoutButton")
+      .addEventListener("click", async function () {
         const { error } = await client.auth.signOut();
+
         if (error) {
-          dashboardMessage.textContent = "Gagal keluar. Silakan coba lagi.";
+          dashboardMessage.textContent =
+            "Gagal keluar. Silakan coba lagi.";
           return;
         }
+
         dashboardMessage.textContent = "";
         message.textContent = "";
         await showSession(null);
-      }
-    );
+      });
 
     client.auth.onAuthStateChange((_event, session) => {
       showSession(session);
     });
 
-    client.auth.getSession().then(({ data }) => showSession(data.session));
+    client.auth.getSession().then(({ data, error }) => {
+      if (error) {
+        message.textContent =
+          "Sesi tidak dapat diperiksa. Silakan muat ulang halaman.";
+        return;
+      }
+      showSession(data.session);
+    });
   </script>
 </body>
 </html>
