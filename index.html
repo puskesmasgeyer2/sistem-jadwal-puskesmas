@@ -341,18 +341,38 @@
       <div id="message" role="status" aria-live="polite"></div>
     </section>
 
-    <section id="dashboardCard" class="card hidden">
-      <h2>Dashboard</h2>
-      <p id="welcome"></p>
-      <p class="muted">
-        Login berhasil. Berikutnya kita akan menambahkan kalender
-        dan pengelolaan jadwal.
-      </p>
-      <button id="logoutButton" class="secondary" type="button">
-        Keluar
-      </button>
-      <div id="dashboardMessage" role="status"></div>
-    </section>
+    
+<section id="dashboardCard" class="card hidden">
+  <h2>Dashboard</h2>
+  <p id="welcome"></p>
+  <p class="muted">
+    Selamat datang di Sistem Jadwal UPTD Puskesmas Geyer 2.
+    Silakan pilih menu yang ingin dibuka.
+  </p>
+
+  <div class="dashboard-menu">
+    <button type="button" id="calendarMenu">
+      📅 Kalender
+    </button>
+
+    <button type="button" id="scheduleMenu">
+      📋 Jadwal Kegiatan
+    </button>
+
+    <button type="button" id="masterMenu">
+      👥 Data Master
+    </button>
+  </div>
+
+  <div id="dashboardContent" aria-live="polite"></div>
+
+  <button id="logoutButton" class="secondary" type="button">
+    Keluar
+  </button>
+
+  <div id="dashboardMessage" role="status"></div>
+</section>
+
 
     <footer class="footer">
       <strong>UPTD Puskesmas Geyer 2</strong>
