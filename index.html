@@ -1,0 +1,188 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sistem Jadwal Puskesmas Geyer 2</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f1f5f9;
+      color: #1e293b;
+    }
+    header {
+      background: #087f5b;
+      color: white;
+      padding: 20px;
+      text-align: center;
+    }
+    main {
+      width: min(440px, 92%);
+      margin: 32px auto;
+    }
+    .card {
+      background: white;
+      padding: 24px;
+      border-radius: 14px;
+      box-shadow: 0 4px 18px #0000000d;
+    }
+    h2 { margin-top: 0; }
+    label {
+      display: block;
+      margin: 14px 0 6px;
+      font-size: 14px;
+      font-weight: bold;
+    }
+    input, button {
+      width: 100%;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 15px;
+    }
+    input {
+      border: 1px solid #cbd5e1;
+    }
+    button {
+      border: 0;
+      background: #087f5b;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 16px;
+    }
+    button.secondary { background: #475569; }
+    #message {
+      margin-top: 14px;
+      font-size: 14px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+    .hidden { display: none; }
+    .muted { color: #64748b; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Sistem Jadwal</h1>
+    <div>UPTD Puskesmas Geyer 2</div>
+  </header>
+
+  <main>
+    <section id="loginCard" class="card">
+      <h2>Login Pengguna</h2>
+      <p class="muted">Masuk menggunakan akun yang telah didaftarkan administrator.</p>
+
+      <form id="loginForm">
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="username"
+          required placeholder="Masukkan email">
+
+        <label for="password">Password</label>
+        <input id="password" type="password"
+          autocomplete="current-password" required placeholder="Masukkan password">
+
+        <button type="submit">Masuk</button>
+      </form>
+      <div id="message" role="status"></div>
+    </section>
+
+    <section id="dashboardCard" class="card hidden">
+      <h2>Dashboard</h2>
+      <p id="welcome"></p>
+      <p class="muted">Login berhasil. Berikutnya kita akan menambahkan kalender dan pengelolaan jadwal.</p>
+      <button id="logoutButton" class="secondary">Keluar</button>
+      <div id="dashboardMessage" role="status"></div>
+    </section>
+  </main>
+
+  <script>
+    const SUPABASE_URL = "https://xqeuklqhkslfvhqrhyyr.supabase.co";
+    const SUPABASE_PUBLISHABLE_KEY = "PASTE_PUBLISHABLE_KEY_DI_SINI";
+
+    const client = window.supabase.createClient(
+      SUPABASE_URL,
+      SUPABASE_PUBLISHABLE_KEY
+    );
+
+    const loginCard = document.getElementById("loginCard");
+    const dashboardCard = document.getElementById("dashboardCard");
+    const message = document.getElementById("message");
+    const dashboardMessage = document.getElementById("dashboardMessage");
+
+    async function showSession(session) {
+      if (!session) {
+        loginCard.classList.remove("hidden");
+        dashboardCard.classList.add("hidden");
+        return;
+      }
+
+      const { data, error } = await client
+        .from("profiles")
+        .select("full_name, role, is_active")
+        .eq("id", session.user.id)
+        .maybeSingle();
+
+      if (error || !data || !data.is_active) {
+        await client.auth.signOut();
+        message.textContent =
+          "Profil pengguna belum tersedia atau akun belum aktif. Hubungi administrator.";
+        loginCard.classList.remove("hidden");
+        dashboardCard.classList.add("hidden");
+        return;
+      }
+
+      loginCard.classList.add("hidden");
+      dashboardCard.classList.remove("hidden");
+      document.getElementById("welcome").textContent =
+        "Selamat datang, " + data.full_name + " (" + data.role + ").";
+    }
+
+    document.getElementById("loginForm").addEventListener("submit",
+      async function (event) {
+        event.preventDefault();
+        message.textContent = "Memeriksa akun...";
+
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
+
+        const { data, error } = await client.auth.signInWithPassword({
+          email,
+          password
+        });
+
+        if (error) {
+          message.textContent =
+            "Login gagal. Periksa email dan password, lalu coba lagi.";
+          return;
+        }
+
+        message.textContent = "";
+        await showSession(data.session);
+      }
+    );
+
+    document.getElementById("logoutButton").addEventListener("click",
+      async function () {
+        const { error } = await client.auth.signOut();
+        if (error) {
+          dashboardMessage.textContent = "Gagal keluar. Silakan coba lagi.";
+          return;
+        }
+        dashboardMessage.textContent = "";
+        message.textContent = "";
+        await showSession(null);
+      }
+    );
+
+    client.auth.onAuthStateChange((_event, session) => {
+      showSession(session);
+    });
+
+    client.auth.getSession().then(({ data }) => showSession(data.session));
+  </script>
+</body>
+</html>
