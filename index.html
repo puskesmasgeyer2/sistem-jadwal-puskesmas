@@ -9,6 +9,68 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
+  .dashboard-menu {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.dashboard-menu button {
+  margin-top: 0;
+}
+
+#dashboardContent {
+  margin-top: 24px;
+  overflow-x: auto;
+}
+
+.calendar-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 14px 0;
+}
+
+.calendar-toolbar select,
+.calendar-toolbar button {
+  width: auto;
+  min-height: 42px;
+  margin-top: 0;
+  padding: 9px 13px;
+  font-size: 14px;
+}
+
+.calendar-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  font-size: 14px;
+}
+
+.calendar-table th,
+.calendar-table td {
+  padding: 10px;
+  border: 1px solid #dbe5e8;
+  text-align: left;
+  vertical-align: top;
+}
+
+.calendar-table th {
+  background: #e8f5ef;
+  color: #075c43;
+}
+
+.calendar-table tr:nth-child(even) {
+  background: #f7faf9;
+}
+
+.calendar-note {
+  color: #607187;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
   <style>
     * {
       box-sizing: border-box;
@@ -285,69 +347,6 @@
         padding-top: 24px;
       }
     }
-
-    
-.dashboard-menu {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
-}
-
-.dashboard-menu button {
-  margin-top: 0;
-}
-
-#dashboardContent {
-  margin-top: 24px;
-  overflow-x: auto;
-}
-
-.calendar-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  margin: 14px 0;
-}
-
-.calendar-toolbar select,
-.calendar-toolbar button {
-  width: auto;
-  min-height: 42px;
-  margin-top: 0;
-  padding: 9px 13px;
-  font-size: 14px;
-}
-
-.calendar-table {
-  width: 100%;
-  border-collapse: collapse;
-  background: white;
-  font-size: 14px;
-}
-
-.calendar-table th,
-.calendar-table td {
-  padding: 10px;
-  border: 1px solid #dbe5e8;
-  text-align: left;
-  vertical-align: top;
-}
-
-.calendar-table th {
-  background: #e8f5ef;
-  color: #075c43;
-}
-
-.calendar-table tr:nth-child(even) {
-  background: #f7faf9;
-}
-
-.calendar-note {
-  color: #607187;
-  font-size: 13px;
-  line-height: 1.5;
-}
 
   </style>
 </head>
