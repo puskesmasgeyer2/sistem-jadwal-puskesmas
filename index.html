@@ -285,6 +285,70 @@
         padding-top: 24px;
       }
     }
+
+    
+.dashboard-menu {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.dashboard-menu button {
+  margin-top: 0;
+}
+
+#dashboardContent {
+  margin-top: 24px;
+  overflow-x: auto;
+}
+
+.calendar-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 14px 0;
+}
+
+.calendar-toolbar select,
+.calendar-toolbar button {
+  width: auto;
+  min-height: 42px;
+  margin-top: 0;
+  padding: 9px 13px;
+  font-size: 14px;
+}
+
+.calendar-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  font-size: 14px;
+}
+
+.calendar-table th,
+.calendar-table td {
+  padding: 10px;
+  border: 1px solid #dbe5e8;
+  text-align: left;
+  vertical-align: top;
+}
+
+.calendar-table th {
+  background: #e8f5ef;
+  color: #075c43;
+}
+
+.calendar-table tr:nth-child(even) {
+  background: #f7faf9;
+}
+
+.calendar-note {
+  color: #607187;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
   </style>
 </head>
 
@@ -477,6 +541,116 @@
         loginButton.textContent = "Masuk";
       }
     });
+
+    
+function escapeCalendarText(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+async function loadCalendar(year) {
+  const content = document.getElementById("dashboardContent");
+
+  content.innerHTML = "<p>Memuat kalender " + year + "...</p>";
+
+  const startDate = year + "-01-01";
+  const endDate = (year + 1) + "-01-01";
+
+  const { data, error } = await client
+    .from("calendar_days")
+    .select(
+      "calendar_date, nama_hari, day_description, day_type, schedule_policy, verification_status"
+    )
+    .gte("calendar_date", startDate)
+    .lt("calendar_date", endDate)
+    .order("calendar_date", { ascending: true })
+    .limit(500);
+
+  if (error) {
+    content.textContent =
+      "Kalender gagal dimuat. Periksa nama kolom dan izin baca tabel calendar_days di Supabase. Detail: " +
+      error.message;
+    return;
+  }
+
+  const rows = (data || []).map(function (day) {
+    const date = escapeCalendarText(day.calendar_date);
+    const weekday = escapeCalendarText(day.nama_hari);
+    const description = escapeCalendarText(day.day_description || "-");
+    const type = escapeCalendarText(day.day_type || "-");
+    const policy = escapeCalendarText(day.schedule_policy || "-");
+    const verification = escapeCalendarText(
+      day.verification_status || "-"
+    );
+
+    return `
+      <tr>
+        <td>${date}</td>
+        <td>${weekday}</td>
+        <td>${description}</td>
+        <td>${type}</td>
+        <td>${policy}</td>
+        <td>${verification}</td>
+      </tr>`;
+  }).join("");
+
+  content.innerHTML = `
+    <h2>Kalender ${year}</h2>
+    <div class="calendar-toolbar">
+      <label for="calendarYear">Pilih tahun</label>
+      <select id="calendarYear">
+        <option value="2026" ${year === 2026 ? "selected" : ""}>2026</option>
+        <option value="2027" ${year === 2027 ? "selected" : ""}>2027</option>
+      </select>
+      <button type="button" id="refreshCalendar">Muat ulang</button>
+    </div>
+    <p class="calendar-note">
+      Data dibaca dari Supabase. Kolom kebijakan menunjukkan apakah
+      tanggal diizinkan, diberi peringatan, atau diblokir.
+    </p>
+    <p>Jumlah tanggal ditemukan: <strong>${(data || []).length}</strong></p>
+    <table class="calendar-table">
+      <thead>
+        <tr>
+          <th>Tanggal</th>
+          <th>Hari</th>
+          <th>Keterangan</th>
+          <th>Jenis Hari</th>
+          <th>Kebijakan Jadwal</th>
+          <th>Verifikasi</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows || '<tr><td colspan="6">Tidak ada data untuk tahun ini.</td></tr>'}
+      </tbody>
+    </table>`;
+
+  document.getElementById("calendarYear").addEventListener(
+    "change",
+    function () {
+      loadCalendar(Number(this.value));
+    }
+  );
+
+  document.getElementById("refreshCalendar").addEventListener(
+    "click",
+    function () {
+      loadCalendar(year);
+    }
+  );
+}
+
+document.getElementById("calendarMenu").addEventListener(
+  "click",
+  function () {
+    loadCalendar(2026);
+  }
+);
+
 
     document.getElementById("logoutButton")
       .addEventListener("click", async function () {
