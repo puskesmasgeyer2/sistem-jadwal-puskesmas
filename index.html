@@ -492,11 +492,13 @@
       document.getElementById("dashboardMessage");
 
     let sessionCheckId = 0;
+    let currentProfile = null;
 
     async function showSession(session) {
       const checkId = ++sessionCheckId;
 
       if (!session) {
+        currentProfile = null;
         loginCard.classList.remove("hidden");
         dashboardCard.classList.add("hidden");
         return;
@@ -504,7 +506,7 @@
 
       const { data, error } = await client
         .from("profiles")
-        .select("full_name, role, is_active")
+        .select("full_name, role, staff_id, is_active")
         .eq("id", session.user.id)
         .maybeSingle();
 
@@ -519,6 +521,7 @@
         return;
       }
 
+      currentProfile = data;
       loginCard.classList.add("hidden");
       dashboardCard.classList.remove("hidden");
 
@@ -678,10 +681,234 @@ async function loadCalendar(year) {
 document.getElementById("calendarMenu").addEventListener(
   "click",
   function () {
-    loadCalendar(2026);
+    loadCalendar(new Date().getFullYear() >= 2026 ? new Date().getFullYear() : 2026);
   }
 );
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function showDashboardMessage(text, isError = false) {
+  dashboardMessage.textContent = text;
+  dashboardMessage.style.color = isError ? "#b42318" : "#087f5b";
+}
+
+async function fetchActiveMaster(table, columns) {
+  const { data, error } = await client
+    .from(table)
+    .select(columns)
+    .eq("is_active", true)
+    .order(table === "programs" ? "program_name" : table === "staff" ? "full_name" : "place_name");
+  if (error) throw error;
+  return data || [];
+}
+
+async function loadSchedulePage() {
+  const content = document.getElementById("dashboardContent");
+  showDashboardMessage("");
+  content.innerHTML = "<p>Memuat data jadwal dan data master...</p>";
+
+  try {
+    const [programs, staff, places, calendarResult] = await Promise.all([
+      fetchActiveMaster("programs", "id, program_code, program_name, is_active"),
+      fetchActiveMaster("staff", "id, employee_code, full_name, is_active"),
+      fetchActiveMaster("places", "id, place_name, is_active"),
+      Promise.resolve(null)
+    ]);
+
+    const isPetugas = currentProfile?.role === "petugas";
+    if (isPetugas && !currentProfile.staff_id) {
+      content.innerHTML = "<h2>Jadwal Kegiatan</h2><p>Akun petugas ini belum terhubung ke data petugas. Hubungi administrator untuk mengisi profil staff_id.</p>";
+      return;
+    }
+
+    const staffOptions = staff
+      .filter(person => !isPetugas || person.id === currentProfile.staff_id)
+      .map(person => `<option value="${escapeHtml(person.id)}">${escapeHtml(person.full_name)}${person.employee_code ? " — " + escapeHtml(person.employee_code) : ""}</option>`)
+      .join("");
+    const programOptions = programs.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.program_name)}${item.program_code ? " — " + escapeHtml(item.program_code) : ""}</option>`).join("");
+    const placeOptions = places.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.place_name)}</option>`).join("");
+
+    content.innerHTML = `
+      <h2>Jadwal Kegiatan</h2>
+      <p class="calendar-note">Isi formulir untuk menambahkan jadwal. Minggu dan tanggal berstatus blokir akan ditolak oleh sistem. Jadwal hari Sabtu menampilkan konfirmasi peringatan.</p>
+      <form id="scheduleForm">
+        <label for="activityDate">Tanggal kegiatan</label>
+        <input id="activityDate" type="date" required>
+        <label for="programId">Program kegiatan</label>
+        <select id="programId" required style="width:100%;min-height:48px;padding:10px;border:1px solid #cbd7e3;border-radius:10px;background:white">
+          <option value="">Pilih program</option>${programOptions}
+        </select>
+        <label for="staffId">Nama petugas</label>
+        <select id="staffId" required style="width:100%;min-height:48px;padding:10px;border:1px solid #cbd7e3;border-radius:10px;background:white" ${isPetugas ? "disabled" : ""}>
+          <option value="">Pilih petugas</option>${staffOptions}
+        </select>
+        <label for="placeId">Tempat kegiatan</label>
+        <select id="placeId" required style="width:100%;min-height:48px;padding:10px;border:1px solid #cbd7e3;border-radius:10px;background:white">
+          <option value="">Pilih tempat</option>${placeOptions}
+        </select>
+        <label for="scheduleNotes">Catatan (opsional)</label>
+        <input id="scheduleNotes" type="text" maxlength="500" placeholder="Keterangan tambahan">
+        <button id="saveScheduleButton" type="submit">Simpan Jadwal</button>
+      </form>
+      <div id="scheduleFormMessage" role="status" aria-live="polite"></div>
+      <hr style="margin:26px 0;border:0;border-top:1px solid #dbe5e8">
+      <h2>Daftar Jadwal Terbaru</h2>
+      <div id="scheduleList"><p>Memuat jadwal...</p></div>`;
+
+    if (isPetugas) document.getElementById("staffId").value = currentProfile.staff_id;
+    document.getElementById("scheduleForm").addEventListener("submit", saveSchedule);
+    await loadScheduleList(programs, staff, places);
+  } catch (error) {
+    content.innerHTML = "<h2>Jadwal Kegiatan</h2><p>Data jadwal belum dapat dimuat. Periksa tabel master dan izin akses Supabase.</p>";
+    showDashboardMessage("Detail: " + (error.message || "Terjadi kesalahan"), true);
+  }
+}
+
+async function saveSchedule(event) {
+  event.preventDefault();
+  const button = document.getElementById("saveScheduleButton");
+  const formMessage = document.getElementById("scheduleFormMessage");
+  const activityDate = document.getElementById("activityDate").value;
+  const programId = document.getElementById("programId").value;
+  const staffId = document.getElementById("staffId").value;
+  const placeId = document.getElementById("placeId").value;
+  const notes = document.getElementById("scheduleNotes").value.trim();
+
+  formMessage.style.color = "#b42318";
+  formMessage.textContent = "";
+  if (!activityDate || !programId || !staffId || !placeId) {
+    formMessage.textContent = "Tanggal, program, petugas, dan tempat wajib diisi.";
+    return;
+  }
+
+  const chosenDate = new Date(activityDate + "T12:00:00");
+  const dayOfWeek = chosenDate.getDay();
+  if (dayOfWeek === 0) {
+    formMessage.textContent = "Jadwal tidak dapat dibuat pada hari Minggu.";
+    return;
+  }
+
+  const { data: calendarDay, error: calendarError } = await client
+    .from("calendar_days")
+    .select("day_description, day_type, schedule_policy, verification_status")
+    .eq("calendar_date", activityDate)
+    .maybeSingle();
+
+  if (calendarError) {
+    formMessage.textContent = "Kebijakan kalender tidak dapat diperiksa: " + calendarError.message;
+    return;
+  }
+  if (!calendarDay) {
+    formMessage.textContent = "Tanggal ini belum tersedia di kalender. Hubungi administrator.";
+    return;
+  }
+  if (calendarDay.schedule_policy === "block") {
+    formMessage.textContent = "Tanggal diblokir: " + (calendarDay.day_description || activityDate);
+    return;
+  }
+  if (dayOfWeek === 6 || calendarDay.schedule_policy === "warning") {
+    const detail = calendarDay.day_description ? " (" + calendarDay.day_description + ")" : "";
+    if (!window.confirm("Perhatian: tanggal ini memiliki kebijakan peringatan" + detail + ". Tetap simpan jadwal?")) return;
+  }
+
+  button.disabled = true;
+  button.textContent = "Menyimpan...";
+  try {
+    const { error } = await client.from("schedules").insert({
+      activity_date: activityDate,
+      program_id: programId,
+      staff_id: staffId,
+      place_id: placeId,
+      notes: notes || null,
+      status: "valid"
+    });
+    if (error) {
+      let friendly = error.message || "Terjadi kesalahan.";
+      if (/duplicate key|schedules_staff_date_unique|unique constraint/i.test(friendly)) {
+        friendly = "Petugas tersebut sudah memiliki jadwal pada tanggal itu. Pilih petugas atau tanggal lain.";
+      } else if (/row-level security|permission denied/i.test(friendly)) {
+        friendly = "Akun Anda tidak memiliki izin untuk menambahkan jadwal ini.";
+      }
+      formMessage.textContent = "Jadwal belum tersimpan: " + friendly;
+      return;
+    }
+    formMessage.style.color = "#087f5b";
+    formMessage.textContent = "Jadwal berhasil disimpan.";
+    document.getElementById("scheduleForm").reset();
+    if (currentProfile?.role === "petugas" && currentProfile.staff_id) {
+      document.getElementById("staffId").value = currentProfile.staff_id;
+    }
+    await loadScheduleList();
+  } catch (error) {
+    formMessage.textContent = "Jadwal belum tersimpan: " + (error.message || "Koneksi bermasalah.");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Simpan Jadwal";
+  }
+}
+
+async function loadScheduleList(programsArg, staffArg, placesArg) {
+  const list = document.getElementById("scheduleList");
+  if (!list) return;
+  list.innerHTML = "<p>Memuat jadwal...</p>";
+  try {
+    const [scheduleResult, programs, staff, places] = await Promise.all([
+      client.from("schedules")
+        .select("id, activity_date, program_id, staff_id, place_id, notes, status")
+        .eq("status", "valid")
+        .order("activity_date", { ascending: false })
+        .limit(100),
+      programsArg ? Promise.resolve(programsArg) : fetchActiveMaster("programs", "id, program_code, program_name, is_active"),
+      staffArg ? Promise.resolve(staffArg) : fetchActiveMaster("staff", "id, employee_code, full_name, is_active"),
+      placesArg ? Promise.resolve(placesArg) : fetchActiveMaster("places", "id, place_name, is_active")
+    ]);
+    if (scheduleResult.error) throw scheduleResult.error;
+    const programMap = Object.fromEntries(programs.map(x => [x.id, x.program_name]));
+    const staffMap = Object.fromEntries(staff.map(x => [x.id, x.full_name]));
+    const placeMap = Object.fromEntries(places.map(x => [x.id, x.place_name]));
+    const rows = (scheduleResult.data || []).map(item => `
+      <tr>
+        <td>${escapeHtml(item.activity_date)}</td>
+        <td>${escapeHtml(programMap[item.program_id] || "Program tidak ditemukan")}</td>
+        <td>${escapeHtml(staffMap[item.staff_id] || "Petugas tidak ditemukan")}</td>
+        <td>${escapeHtml(placeMap[item.place_id] || "Tempat tidak ditemukan")}</td>
+        <td>${escapeHtml(item.notes || "-")}</td>
+      </tr>`).join("");
+    list.innerHTML = `<table class="calendar-table"><thead><tr><th>Tanggal</th><th>Program</th><th>Petugas</th><th>Tempat</th><th>Catatan</th></tr></thead><tbody>${rows || '<tr><td colspan="5">Belum ada jadwal yang tersimpan.</td></tr>'}</tbody></table><p class="calendar-note">Menampilkan maksimal 100 jadwal valid terbaru.</p>`;
+  } catch (error) {
+    list.innerHTML = "<p>Daftar jadwal belum dapat dimuat. Detail: " + escapeHtml(error.message || "Terjadi kesalahan") + "</p>";
+  }
+}
+
+async function loadMasterPage() {
+  const content = document.getElementById("dashboardContent");
+  showDashboardMessage("");
+  content.innerHTML = "<p>Memuat data master...</p>";
+  try {
+    const [programs, staff, places] = await Promise.all([
+      fetchActiveMaster("programs", "id, program_code, program_name, is_active"),
+      fetchActiveMaster("staff", "id, employee_code, full_name, is_active"),
+      fetchActiveMaster("places", "id, place_name, is_active")
+    ]);
+    const renderTable = (title, headers, rows) => `<h2 style="margin-top:24px">${title} (${rows.length})</h2><table class="calendar-table"><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${escapeHtml(cell || "-")}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${headers.length}">Tidak ada data.</td></tr>`}</tbody></table>`;
+    content.innerHTML = `<h2>Data Master</h2><p class="calendar-note">Data berikut dibaca dari Supabase. Pengubahan data master belum tersedia di halaman ini.</p>` +
+      renderTable("Program", ["Kode", "Nama Program"], programs.map(x => [x.program_code, x.program_name])) +
+      renderTable("Petugas", ["Kode Petugas", "Nama Petugas"], staff.map(x => [x.employee_code, x.full_name])) +
+      renderTable("Tempat", ["Nama Tempat"], places.map(x => [x.place_name]));
+  } catch (error) {
+    content.innerHTML = "<h2>Data Master</h2><p>Data master gagal dimuat. Detail: " + escapeHtml(error.message || "Terjadi kesalahan") + "</p>";
+  }
+}
+
+document.getElementById("scheduleMenu").addEventListener("click", loadSchedulePage);
+document.getElementById("masterMenu").addEventListener("click", loadMasterPage);
 
     document.getElementById("logoutButton")
       .addEventListener("click", async function () {
