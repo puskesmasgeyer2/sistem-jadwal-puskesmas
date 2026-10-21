@@ -342,6 +342,34 @@
   background: #f7faf9;
 }
 
+    
+/* Tabel kalender lebih nyaman dibaca */
+#dashboardContent {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.calendar-table {
+  min-width: 760px;
+  width: 100%;
+  table-layout: auto;
+  font-size: 13px;
+}
+
+.calendar-table th,
+.calendar-table td {
+  padding: 9px 10px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.calendar-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
 .calendar-note {
   color: #607187;
   font-size: 13px;
