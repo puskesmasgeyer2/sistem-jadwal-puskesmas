@@ -562,7 +562,7 @@ async function loadCalendar(year) {
   const { data, error } = await client
     .from("calendar_days")
     .select(
-      "calendar_date, nama_hari, day_description, day_type, schedule_policy, verification_status"
+      "calendar_date, day_description, day_type, schedule_policy, verification_status"
     )
     .gte("calendar_date", startDate)
     .lt("calendar_date", endDate)
@@ -578,7 +578,11 @@ async function loadCalendar(year) {
 
   const rows = (data || []).map(function (day) {
     const date = escapeCalendarText(day.calendar_date);
-    const weekday = escapeCalendarText(day.nama_hari);
+    const tanggal = new Date(day.calendar_date + "T12:00:00");
+    const weekday = tanggal.toLocaleDateString("id-ID", {
+                    weekday: "long",
+                    timeZone: "Asia/Jakarta"
+                    });
     const description = escapeCalendarText(day.day_description || "-");
     const type = escapeCalendarText(day.day_type || "-");
     const policy = escapeCalendarText(day.schedule_policy || "-");
