@@ -49,7 +49,80 @@ $('logoutButton').addEventListener('click',async()=>{const {error}=await client.
 async function fetchMaster(table,columns,order){const {data,error}=await client.from(table).select(columns).eq('is_active',true).order(order,{ascending:true}).limit(1000);if(error)throw error;return data||[]}
 async function loadMasters(){const [programs,staff,places]=await Promise.all([fetchMaster('programs','id,program_code,program_name,is_active','program_name'),fetchMaster('staff','id,employee_code,full_name,is_active','full_name'),fetchMaster('places','id,place_name,is_active','place_name')]);masterCache={programs,staff,places};return masterCache}
 function monthYearFilters(){const now=new Date();const years=[];for(let y=2026;y<=Math.max(2032,now.getFullYear()+2);y++)years.push(y);return `<div class="filters"><div><label for="filterMonth">Bulan</label><select id="filterMonth"><option value="all">Semua bulan</option>${['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'].map((m,i)=>`<option value="${i+1}" ${i+1===now.getMonth()+1?'selected':''}>${m}</option>`).join('')}</select></div><div><label for="filterYear">Tahun</label><select id="filterYear">${years.map(y=>`<option value="${y}" ${y===now.getFullYear()?'selected':''}>${y}</option>`).join('')}<option value="all">Semua tahun</option></select></div><div class="filter-search"><label for="filterSearch">Cari jadwal</label><input id="filterSearch" placeholder="Program, petugas, tempat..."></div><button id="applyFilters" type="button">Terapkan</button></div>`}
-async function getScheduleData(){const {data,error}=await client.from('schedules').select('id,activity_date,program_id,staff_id,place_id,notes,status').eq('status','valid').order('activity_date',{ascending:false}).limit(2000);if(error)throw error;const masters=await loadMasters();const pm=Object.fromEntries(masters.programs.map(x=>[x.id,x.program_name]));const sm=Object.fromEntries(masters.staff.map(x=>[x.id,x.full_name]));const lm=Object.fromEntries(masters.places.map(x=>[x.id,x.place_name]));return (data||[]).map(x=>({...x,program_name:pm[x.program_id]||'Program tidak ditemukan',staff_name:sm[x.staff_id]||'Petugas tidak ditemukan',place_name:lm[x.place_id]||'Tempat tidak ditemukan'}))}
+
+async function getScheduleData() {
+  // Ambil jadwal yang masih berstatus valid
+  const { data, error } = await client
+    .from('schedules')
+    .select(`
+      id,
+      activity_date,
+      program_id,
+      staff_id,
+      place_id,
+      notes,
+      status
+    `)
+    .eq('status', 'valid')
+    .order('activity_date', { ascending: false })
+    .limit(2000);
+
+  if (error) throw error;
+
+  // Ambil SEMUA data master, termasuk yang sudah nonaktif.
+  // Tujuannya agar nama pada jadwal lama tetap bisa ditampilkan.
+  const [programResult, staffResult, placeResult] =
+    await Promise.all([
+      client
+        .from('programs')
+        .select('id, program_name'),
+
+      client
+        .from('staff')
+        .select('id, full_name'),
+
+      client
+        .from('places')
+        .select('id, place_name')
+    ]);
+
+  if (programResult.error) throw programResult.error;
+  if (staffResult.error) throw staffResult.error;
+  if (placeResult.error) throw placeResult.error;
+
+  const programMap = Object.fromEntries(
+    (programResult.data || []).map(item => [
+      item.id,
+      item.program_name
+    ])
+  );
+
+  const staffMap = Object.fromEntries(
+    (staffResult.data || []).map(item => [
+      item.id,
+      item.full_name
+    ])
+  );
+
+  const placeMap = Object.fromEntries(
+    (placeResult.data || []).map(item => [
+      item.id,
+      item.place_name
+    ])
+  );
+
+  // Gabungkan jadwal dengan nama master berdasarkan ID.
+  return (data || []).map(item => ({
+    ...item,
+    program_name:
+      programMap[item.program_id] || 'Program tidak ditemukan',
+    staff_name:
+      staffMap[item.staff_id] || 'Petugas tidak ditemukan',
+    place_name:
+      placeMap[item.place_id] || 'Tempat tidak ditemukan'
+  }));
+}
+
 async function renderHome(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat jadwal...</div>';try{allSchedules=await getScheduleData();const now=new Date();const month=String(now.getMonth()+1).padStart(2,'0');const prefix=now.getFullYear()+'-'+month;const thisMonth=allSchedules.filter(x=>x.activity_date.startsWith(prefix)).length;const staffCount=masterCache.staff.length;const programCount=masterCache.programs.length;c.innerHTML=`<div class="welcome-row"><div><h3>Selamat datang, ${esc(currentProfile?.full_name||'Pengguna')} 👋</h3><p>Kelola jadwal kegiatan Puskesmas dalam satu tempat.</p></div><button type="button" id="quickAdd">＋ Input Jadwal</button></div><div class="stats"><div class="stat"><div><div class="stat-top">Total jadwal valid</div><strong>${allSchedules.length}</strong></div><span class="stat-icon">▤</span></div><div class="stat"><div><div class="stat-top">Jadwal bulan ini</div><strong>${thisMonth}</strong></div><span class="stat-icon">▦</span></div><div class="stat"><div><div class="stat-top">Petugas aktif</div><strong>${staffCount}</strong></div><span class="stat-icon">♙</span></div></div><section class="panel"><div class="panel-head"><h3>Daftar Jadwal Kegiatan</h3><span class="badge">${programCount} program aktif</span></div>${monthYearFilters()}<div id="homeTable"></div><div class="pagination" id="homePagination"></div></section><div class="page-foot">Sistem Jadwal UPTD Puskesmas Geyer 2</div>`;$('quickAdd').addEventListener('click',()=>setPage('input'));$('applyFilters').addEventListener('click',()=>{currentPageNumber=1;drawHomeTable()});['filterMonth','filterYear'].forEach(id=>$(id).addEventListener('change',()=>{currentPageNumber=1;drawHomeTable()}));$('filterSearch').addEventListener('input',()=>{currentPageNumber=1;drawHomeTable()});drawHomeTable()}catch(e){c.innerHTML=`<div class="panel"><h3>Jadwal belum dapat dimuat</h3><p class="muted">Periksa izin baca tabel schedules dan tabel data master di Supabase.</p><div class="notice warn">Detail: ${esc(e.message||'Kesalahan tidak diketahui')}</div><button id="retryHome">Coba lagi</button></div>`;$('retryHome').addEventListener('click',renderHome)}}
 function drawHomeTable(){const month=$('filterMonth')?.value||'all',year=$('filterYear')?.value||String(new Date().getFullYear()),q=($('filterSearch')?.value||'').trim().toLowerCase();let rows=allSchedules.filter(x=>(month==='all'||Number(x.activity_date.slice(5,7))===Number(month))&&(year==='all'||x.activity_date.startsWith(year))&&[x.program_name,x.staff_name,x.place_name,x.notes].some(v=>String(v||'').toLowerCase().includes(q)));const pages=Math.max(1,Math.ceil(rows.length/pageSize));currentPageNumber=Math.min(currentPageNumber,pages);const start=(currentPageNumber-1)*pageSize;const pageRows=rows.slice(start,start+pageSize);$('homeTable').innerHTML=pageRows.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>Tanggal</th><th>Program</th><th>Petugas</th><th>Tempat</th><th>Catatan</th><th>Status</th></tr></thead><tbody>${pageRows.map(x=>`<tr><td>${esc(x.activity_date)}</td><td>${esc(x.program_name)}</td><td>${esc(x.staff_name)}</td><td>${esc(x.place_name)}</td><td>${esc(x.notes||'-')}</td><td><span class="badge">Valid</span></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">Tidak ada jadwal sesuai filter.</div>';$('homePagination').innerHTML=`<span>Menampilkan ${rows.length?start+1:0}–${Math.min(start+pageSize,rows.length)} dari ${rows.length} jadwal</span><div class="pagination-actions"><button id="prevPage" ${currentPageNumber<=1?'disabled':''}>Sebelumnya</button><span style="padding:8px">Halaman ${currentPageNumber}/${pages}</span><button id="nextPage" ${currentPageNumber>=pages?'disabled':''}>Berikutnya</button></div>`;$('prevPage').addEventListener('click',()=>{currentPageNumber--;drawHomeTable()});$('nextPage').addEventListener('click',()=>{currentPageNumber++;drawHomeTable()})}
 async function renderInput(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat pilihan formulir...</div>';try{await loadMasters();const isPetugas=currentProfile?.role==='petugas';if(isPetugas&&!currentProfile.staff_id){c.innerHTML='<div class="panel"><h3>Akun belum terhubung ke petugas</h3><p class="muted">Hubungi administrator untuk mengisi staff_id pada profil akun.</p></div>';return}const opt=(arr,label,value,extra=()=> '')=>arr.map(x=>`<option value="${esc(x[value])}">${esc(label(x))}${extra(x)}</option>`).join('');c.innerHTML=`<div class="welcome-row"><div><h3>Input Jadwal Kegiatan</h3><p>Lengkapi informasi kegiatan. Sistem akan memeriksa kebijakan kalender dan bentrok petugas.</p></div></div><section class="panel"><form id="scheduleForm"><div class="form-grid"><div><label for="activityDate">Tanggal kegiatan *</label><input id="activityDate" type="date" required></div><div><label for="programId">Program kegiatan *</label><select id="programId" required><option value="">Pilih program</option>${opt(masterCache.programs,x=>x.program_name,'id',x=>x.program_code?' — '+x.program_code:'')}</select></div><div><label for="staffId">Nama petugas *</label><select id="staffId" required ${isPetugas?'disabled':''}><option value="">Pilih petugas</option>${opt(masterCache.staff.filter(x=>!isPetugas||x.id===currentProfile.staff_id),x=>x.full_name,'id',x=>x.employee_code?' — '+x.employee_code:'')}</select></div><div><label for="placeId">Tempat kegiatan *</label><select id="placeId" required><option value="">Pilih tempat</option>${opt(masterCache.places,x=>x.place_name,'id')}</select></div><div class="full"><label for="scheduleNotes">Catatan (opsional)</label><textarea id="scheduleNotes" rows="3" maxlength="500" placeholder="Keterangan tambahan"></textarea></div></div><div class="notice warn">Hari Minggu dan tanggal dengan kebijakan blokir tidak dapat dipilih. Hari Sabtu atau tanggal peringatan memerlukan konfirmasi.</div><div id="scheduleFormMessage" role="status" aria-live="polite"></div><div class="form-actions"><button type="button" class="secondary" id="cancelInput">Batal</button><button type="submit" id="saveScheduleButton">Simpan Jadwal</button></div></form></section>`;if(isPetugas)$('staffId').value=currentProfile.staff_id;$('cancelInput').addEventListener('click',()=>setPage('home'));$('scheduleForm').addEventListener('submit',saveSchedule)}catch(e){c.innerHTML=`<div class="panel"><h3>Formulir belum dapat dimuat</h3><div class="notice warn">${esc(e.message||'Periksa izin data master.')}</div></div>`}}
