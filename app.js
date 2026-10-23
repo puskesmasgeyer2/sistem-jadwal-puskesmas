@@ -155,7 +155,209 @@ async function getScheduleData() {
 }
 
 async function renderHome(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat jadwal...</div>';try{await loadMasters();allSchedules=await getScheduleData();const now=new Date();const month=String(now.getMonth()+1).padStart(2,'0');const prefix=now.getFullYear()+'-'+month;const thisMonth=allSchedules.filter(x=>x.activity_date.startsWith(prefix)).length;const staffCount=masterCache.staff.length;const programCount=masterCache.programs.length;c.innerHTML=`<div class="welcome-row"><div><h3>Selamat datang, ${esc(currentProfile?.full_name||'Pengguna')} 👋</h3><p>Kelola jadwal kegiatan Puskesmas dalam satu tempat.</p></div><button type="button" id="quickAdd">＋ Input Jadwal</button></div><div class="stats"><div class="stat"><div><div class="stat-top">Total jadwal valid</div><strong>${allSchedules.length}</strong></div><span class="stat-icon">▤</span></div><div class="stat"><div><div class="stat-top">Jadwal bulan ini</div><strong>${thisMonth}</strong></div><span class="stat-icon">▦</span></div><div class="stat"><div><div class="stat-top">Petugas aktif</div><strong>${staffCount}</strong></div><span class="stat-icon">♙</span></div></div><section class="panel"><div class="panel-head"><h3>Daftar Jadwal Kegiatan</h3><span class="badge">${programCount} program aktif</span></div>${monthYearFilters()}<div id="homeTable"></div><div class="pagination" id="homePagination"></div></section><div class="page-foot">Sistem Jadwal UPTD Puskesmas Geyer 2</div>`;$('quickAdd').addEventListener('click',()=>setPage('input'));$('applyFilters').addEventListener('click',()=>{currentPageNumber=1;drawHomeTable()});['filterMonth','filterYear'].forEach(id=>$(id).addEventListener('change',()=>{currentPageNumber=1;drawHomeTable()}));$('filterSearch').addEventListener('input',()=>{currentPageNumber=1;drawHomeTable()});drawHomeTable()}catch(e){c.innerHTML=`<div class="panel"><h3>Jadwal belum dapat dimuat</h3><p class="muted">Periksa izin baca tabel schedules dan tabel data master di Supabase.</p><div class="notice warn">Detail: ${esc(e.message||'Kesalahan tidak diketahui')}</div><button id="retryHome">Coba lagi</button></div>`;$('retryHome').addEventListener('click',renderHome)}}
-function drawHomeTable(){const month=$('filterMonth')?.value||'all',year=$('filterYear')?.value||String(new Date().getFullYear()),q=($('filterSearch')?.value||'').trim().toLowerCase();let rows=allSchedules.filter(x=>(month==='all'||Number(x.activity_date.slice(5,7))===Number(month))&&(year==='all'||x.activity_date.startsWith(year))&&[x.program_name,x.staff_name,x.place_name,x.notes].some(v=>String(v||'').toLowerCase().includes(q)));const pages=Math.max(1,Math.ceil(rows.length/pageSize));currentPageNumber=Math.min(currentPageNumber,pages);const start=(currentPageNumber-1)*pageSize;const pageRows=rows.slice(start,start+pageSize);$('homeTable').innerHTML=pageRows.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>Tanggal</th><th>Program</th><th>Petugas</th><th>Tempat</th><th>Catatan</th><th>Status</th></tr></thead><tbody>${pageRows.map(x=>`<tr><td>${esc(x.activity_date)}</td><td>${esc(x.program_name)}</td><td>${esc(x.staff_name)}</td><td>${esc(x.place_name)}</td><td>${esc(x.notes||'-')}</td><td><span class="badge">Valid</span></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">Tidak ada jadwal sesuai filter.</div>';$('homePagination').innerHTML=`<span>Menampilkan ${rows.length?start+1:0}–${Math.min(start+pageSize,rows.length)} dari ${rows.length} jadwal</span><div class="pagination-actions"><button id="prevPage" ${currentPageNumber<=1?'disabled':''}>Sebelumnya</button><span style="padding:8px">Halaman ${currentPageNumber}/${pages}</span><button id="nextPage" ${currentPageNumber>=pages?'disabled':''}>Berikutnya</button></div>`;$('prevPage').addEventListener('click',()=>{currentPageNumber--;drawHomeTable()});$('nextPage').addEventListener('click',()=>{currentPageNumber++;drawHomeTable()})}
+
+function openScheduleEditor(item) {
+  const c = $('dashboardContent');
+
+  const options = (items, selectedId, label, value = 'id') =>
+    items.map(x => `
+      <option value="${esc(x[value])}"
+        ${x[value] === selectedId ? 'selected' : ''}>
+        ${esc(label(x))}
+      </option>
+    `).join('');
+
+  c.insertAdjacentHTML('afterbegin', `
+    <section class="panel" id="scheduleEditor">
+      <h3>Edit Jadwal Kegiatan</h3>
+      <form id="editScheduleForm">
+        <label for="editDate">Tanggal kegiatan</label>
+        <input id="editDate" type="date"
+          value="${esc(item.activity_date)}" required>
+
+        <label for="editProgram">Program</label>
+        <select id="editProgram" required>
+          ${options(masterCache.programs, item.program_id, x => x.program_name)}
+        </select>
+
+        <label for="editStaff">Petugas</label>
+        <select id="editStaff" required>
+          ${options(masterCache.staff, item.staff_id, x => x.full_name)}
+        </select>
+
+        <label for="editPlace">Tempat</label>
+        <select id="editPlace" required>
+          ${options(masterCache.places, item.place_id, x => x.place_name)}
+        </select>
+
+        <label for="editNotes">Catatan</label>
+        <textarea id="editNotes" maxlength="500">${esc(item.notes || '')}</textarea>
+
+        <div id="editScheduleMessage" role="status"></div>
+
+        <div class="form-actions">
+          <button type="button" class="secondary" id="cancelScheduleEdit">Batal</button>
+          <button type="submit" id="updateScheduleButton">Simpan Perubahan</button>
+        </div>
+      </form>
+    </section>
+  `);
+
+  $('cancelScheduleEdit').addEventListener('click', () => {
+    $('scheduleEditor').remove();
+  });
+
+  $('editScheduleForm').addEventListener('submit', async e => {
+    e.preventDefault();
+
+    const btn = $('updateScheduleButton');
+    const m = $('editScheduleMessage');
+    const date = $('editDate').value;
+
+    if (new Date(date + 'T12:00:00').getDay() === 0) {
+      m.textContent = 'Jadwal tidak dapat dibuat pada hari Minggu.';
+      return;
+    }
+
+    if (!confirm('Simpan perubahan jadwal ini?')) return;
+
+    btn.disabled = true;
+    m.textContent = 'Menyimpan perubahan...';
+
+    const { error } = await client
+      .from('schedules')
+      .update({
+        activity_date: date,
+        program_id: $('editProgram').value,
+        staff_id: $('editStaff').value,
+        place_id: $('editPlace').value,
+        notes: $('editNotes').value.trim() || null
+      })
+      .eq('id', item.id);
+
+    if (error) {
+      m.textContent = 'Perubahan gagal disimpan: ' + error.message;
+      btn.disabled = false;
+      return;
+    }
+
+    await renderHome();
+    msg('Jadwal berhasil diperbarui.');
+  });
+}
+
+function drawHomeTable() {
+  const month = $('filterMonth')?.value || 'all';
+  const year = $('filterYear')?.value || String(new Date().getFullYear());
+  const q = ($('filterSearch')?.value || '').trim().toLowerCase();
+
+  const rows = allSchedules.filter(x =>
+    (month === 'all' || Number(x.activity_date.slice(5, 7)) === Number(month)) &&
+    (year === 'all' || x.activity_date.startsWith(year)) &&
+    [x.program_name, x.staff_name, x.place_name, x.notes]
+      .some(v => String(v || '').toLowerCase().includes(q))
+  );
+
+  const isAdmin = currentProfile?.role === 'admin';
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  currentPageNumber = Math.min(currentPageNumber, pages);
+
+  const start = (currentPageNumber - 1) * pageSize;
+  const pageRows = rows.slice(start, start + pageSize);
+
+  $('homeTable').innerHTML = pageRows.length
+    ? `<div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Tanggal</th>
+              <th>Program</th>
+              <th>Petugas</th>
+              <th>Tempat</th>
+              <th>Catatan</th>
+              <th>Status</th>
+              ${isAdmin ? '<th>Aksi</th>' : ''}
+            </tr>
+          </thead>
+          <tbody>
+            ${pageRows.map(x => `
+              <tr>
+                <td>${esc(x.activity_date)}</td>
+                <td>${esc(x.program_name)}</td>
+                <td>${esc(x.staff_name)}</td>
+                <td>${esc(x.place_name)}</td>
+                <td>${esc(x.notes || '-')}</td>
+                <td><span class="badge">Valid</span></td>
+                ${isAdmin ? `
+                  <td>
+                    <div class="row-actions">
+                      <button type="button" class="small-btn"
+                        data-edit-schedule="${esc(x.id)}">Edit</button>
+                      <button type="button" class="small-btn danger-btn"
+                        data-delete-schedule="${esc(x.id)}">Hapus</button>
+                    </div>
+                  </td>` : ''}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`
+    : '<div class="empty">Tidak ada jadwal sesuai filter.</div>';
+
+  $('homePagination').innerHTML = `
+    <span>Menampilkan ${rows.length ? start + 1 : 0}–${Math.min(start + pageSize, rows.length)} dari ${rows.length} jadwal</span>
+    <div class="pagination-actions">
+      <button id="prevPage" ${currentPageNumber <= 1 ? 'disabled' : ''}>Sebelumnya</button>
+      <span style="padding:8px">Halaman ${currentPageNumber}/${pages}</span>
+      <button id="nextPage" ${currentPageNumber >= pages ? 'disabled' : ''}>Berikutnya</button>
+    </div>`;
+
+  $('prevPage').addEventListener('click', () => {
+    currentPageNumber--;
+    drawHomeTable();
+  });
+
+  $('nextPage').addEventListener('click', () => {
+    currentPageNumber++;
+    drawHomeTable();
+  });
+
+  document.querySelectorAll('[data-edit-schedule]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const item = allSchedules.find(x => x.id === btn.dataset.editSchedule);
+      if (item) openScheduleEditor(item);
+    });
+  });
+
+  document.querySelectorAll('[data-delete-schedule]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.deleteSchedule;
+      const item = allSchedules.find(x => x.id === id);
+      if (!item) return;
+
+      if (!confirm(
+        `Hapus jadwal ${item.activity_date} untuk ${item.staff_name}?\nTindakan ini tidak dapat dibatalkan.`
+      )) return;
+
+      btn.disabled = true;
+
+      const { error } = await client
+        .from('schedules')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        alert('Jadwal gagal dihapus: ' + error.message);
+        btn.disabled = false;
+        return;
+      }
+
+      await renderHome();
+      msg('Jadwal berhasil dihapus.');
+    });
+  });
+}
+
 async function renderInput(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat pilihan formulir...</div>';try{await loadMasters();const isPetugas=currentProfile?.role==='petugas';if(isPetugas&&!currentProfile.staff_id){c.innerHTML='<div class="panel"><h3>Akun belum terhubung ke petugas</h3><p class="muted">Hubungi administrator untuk mengisi staff_id pada profil akun.</p></div>';return}const opt=(arr,label,value,extra=()=> '')=>arr.map(x=>`<option value="${esc(x[value])}">${esc(label(x))}${extra(x)}</option>`).join('');c.innerHTML=`<div class="welcome-row"><div><h3>Input Jadwal Kegiatan</h3><p>Lengkapi informasi kegiatan. Sistem akan memeriksa kebijakan kalender dan bentrok petugas.</p></div></div><section class="panel"><form id="scheduleForm"><div class="form-grid"><div><label for="activityDate">Tanggal kegiatan *</label><input id="activityDate" type="date" required></div><div><label for="programId">Program kegiatan *</label><select id="programId" required><option value="">Pilih program</option>${opt(masterCache.programs,x=>x.program_name,'id',x=>x.program_code?' — '+x.program_code:'')}</select></div><div><label for="staffId">Nama petugas *</label><select id="staffId" required ${isPetugas?'disabled':''}><option value="">Pilih petugas</option>${opt(masterCache.staff.filter(x=>!isPetugas||x.id===currentProfile.staff_id),x=>x.full_name,'id',x=>x.employee_code?' — '+x.employee_code:'')}</select></div><div><label for="placeId">Tempat kegiatan *</label><select id="placeId" required><option value="">Pilih tempat</option>${opt(masterCache.places,x=>x.place_name,'id')}</select></div><div class="full"><label for="scheduleNotes">Catatan (opsional)</label><textarea id="scheduleNotes" rows="3" maxlength="500" placeholder="Keterangan tambahan"></textarea></div></div><div class="notice warn">Hari Minggu dan tanggal dengan kebijakan blokir tidak dapat dipilih. Hari Sabtu atau tanggal peringatan memerlukan konfirmasi.</div><div id="scheduleFormMessage" role="status" aria-live="polite"></div><div class="form-actions"><button type="button" class="secondary" id="cancelInput">Batal</button><button type="submit" id="saveScheduleButton">Simpan Jadwal</button></div></form></section>`;if(isPetugas)$('staffId').value=currentProfile.staff_id;$('cancelInput').addEventListener('click',()=>setPage('home'));$('scheduleForm').addEventListener('submit',saveSchedule)}catch(e){c.innerHTML=`<div class="panel"><h3>Formulir belum dapat dimuat</h3><div class="notice warn">${esc(e.message||'Periksa izin data master.')}</div></div>`}}
 async function saveSchedule(e){e.preventDefault();const btn=$('saveScheduleButton'),m=$('scheduleFormMessage');m.style.color='#b42318';m.textContent='';const date=$('activityDate').value,program=$('programId').value,staff=$('staffId').value,place=$('placeId').value,notes=$('scheduleNotes').value.trim();if(!date||!program||!staff||!place){m.textContent='Tanggal, program, petugas, dan tempat wajib diisi.';return}const dow=new Date(date+'T12:00:00').getDay();if(dow===0){m.textContent='Jadwal tidak dapat dibuat pada hari Minggu.';return}try{const {data:day,error:ce}=await client.from('calendar_days').select('day_description,day_type,schedule_policy').eq('calendar_date',date).maybeSingle();if(ce)throw ce;if(!day){m.textContent='Tanggal belum tersedia di kalender. Hubungi administrator.';return}if(day.schedule_policy==='block'){m.textContent='Tanggal diblokir: '+(day.day_description||date);return}if(dow===6||day.schedule_policy==='warning'){if(!confirm('Perhatian: tanggal ini memiliki kebijakan peringatan'+(day.day_description?' ('+day.day_description+')':'')+'. Tetap simpan jadwal?'))return}btn.disabled=true;btn.textContent='Menyimpan...';const {error}=await client.from('schedules').insert({activity_date:date,program_id:program,staff_id:staff,place_id:place,notes:notes||null,status:'valid'});if(error){let t=error.message||'Kesalahan';if(/duplicate key|schedules_staff_date_unique|unique constraint/i.test(t))t='Petugas tersebut sudah memiliki jadwal pada tanggal itu.';if(/row-level security|permission denied/i.test(t))t='Akun Anda tidak memiliki izin menyimpan jadwal ini.';m.textContent='Jadwal belum tersimpan: '+t;return}m.style.color='#087f5b';m.textContent='Jadwal berhasil disimpan.';setTimeout(()=>setPage('home'),700)}catch(err){m.textContent='Jadwal belum tersimpan: '+(err.message||'Periksa koneksi.')}finally{btn.disabled=false;btn.textContent='Simpan Jadwal'}}
 async function renderMaster(type, query='', page=1){
