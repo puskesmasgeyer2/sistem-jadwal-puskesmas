@@ -504,22 +504,27 @@ async function renderAccounts() {
               <tbody>
                 ${rows.map(a => `
                   <tr>
-                    <td>${esc(a.full_name)}</td>
-                    <td>${esc(a.email || '-')}</td>
-                    <td>${esc(a.role)}</td>
-                    <td>${esc(a.staff_name || '-')}</td>
-                    <td>${a.is_active ? 'Aktif' : 'Nonaktif'}</td>
                     <td>
-                      ${a.id === currentUser.id
-                        ? '<span class="muted">Akun Anda</span>'
-                        : `<button type="button"
-                            class="small-btn ${a.is_active ? 'danger-btn' : ''}"
-                            data-account-id="${esc(a.id)}"
-                            data-active="${a.is_active ? 'true' : 'false'}">
-                            ${a.is_active ? 'Nonaktifkan' : 'Aktifkan'}
-                          </button>`
-                      }
-                    </td>
+  <div class="row-actions">
+    ${a.id === currentUser.id
+      ? '<span class="muted">Akun Anda</span>'
+      : `<button type="button"
+          class="small-btn ${a.is_active ? 'danger-btn' : ''}"
+          data-account-id="${esc(a.id)}"
+          data-active="${a.is_active ? 'true' : 'false'}">
+          ${a.is_active ? 'Nonaktifkan' : 'Aktifkan'}
+        </button>`
+    }
+
+    ${['operator', 'petugas'].includes(a.role)
+      ? `<button type="button"
+          class="small-btn"
+          data-reset-account-id="${esc(a.id)}">
+          Reset Password
+        </button>`
+      : ''}
+  </div>
+</td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -543,6 +548,19 @@ async function renderAccounts() {
 
           btn.disabled = true;
           message.textContent = 'Memproses perubahan status...';
+
+      table.querySelectorAll('[data-reset-account-id]')
+  .forEach(btn => {
+    btn.addEventListener('click', () => {
+      const account = accounts.find(
+        a => a.id === btn.dataset.resetAccountId
+      );
+
+      if (!account) return;
+
+      showResetPasswordForm(account);
+    });
+  });
 
           try {
             const response = await client.functions.invoke(
@@ -580,7 +598,129 @@ async function renderAccounts() {
         });
       });
     }
+function showResetPasswordForm(account) {
+  editor.innerHTML = `
+    <section class="master-editor">
+      <h3>Reset Password Akun</h3>
+      <p>
+        Akun: <strong>${esc(account.full_name)}</strong><br>
+        Email: ${esc(account.email || '-')}<br>
+        Role: ${esc(account.role)}
+      </p>
 
+      <form id="resetPasswordForm">
+        <div class="form-grid">
+          <div>
+            <label for="resetPassword">Password baru *</label>
+            <input
+              id="resetPassword"
+              type="password"
+              minlength="12"
+              maxlength="128"
+              autocomplete="new-password"
+              required
+            >
+            <small>Minimal 12 karakter.</small>
+          </div>
+
+          <div>
+            <label for="resetPasswordConfirm">
+              Konfirmasi password baru *
+            </label>
+            <input
+              id="resetPasswordConfirm"
+              type="password"
+              minlength="12"
+              maxlength="128"
+              autocomplete="new-password"
+              required
+            >
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="secondary"
+            id="cancelResetPassword">Batal</button>
+          <button type="submit" id="submitResetPassword">
+            Simpan Password Baru
+          </button>
+        </div>
+      </form>
+    </section>
+  `;
+
+  $('cancelResetPassword').addEventListener('click', () => {
+    editor.innerHTML = '';
+  });
+
+  $('resetPasswordForm').addEventListener('submit', async e => {
+    e.preventDefault();
+
+    const password = $('resetPassword').value;
+    const confirmation = $('resetPasswordConfirm').value;
+    const button = $('submitResetPassword');
+
+    if (password.length < 12) {
+      message.style.color = '#b42318';
+      message.textContent = 'Password minimal 12 karakter.';
+      return;
+    }
+
+    if (password !== confirmation) {
+      message.style.color = '#b42318';
+      message.textContent =
+        'Konfirmasi password tidak sama.';
+      return;
+    }
+
+    if (!confirm(
+      `Reset password akun ${account.full_name}?`
+    )) return;
+
+    button.disabled = true;
+    button.textContent = 'Memproses...';
+    message.textContent = '';
+
+    try {
+      const response = await client.functions.invoke(
+        'admin-manage-user',
+        {
+          body: {
+            action: 'reset_password',
+            user_id: account.id,
+            password
+          }
+        }
+      );
+
+      if (response.error) {
+        throw new Error(
+          response.data?.error || response.error.message
+        );
+      }
+
+      if (!response.data?.success) {
+        throw new Error(
+          response.data?.error || 'Reset password gagal.'
+        );
+      }
+
+      editor.innerHTML = '';
+      message.style.color = '#087f5b';
+      message.textContent =
+        `Password akun ${account.full_name} berhasil direset.`;
+
+    } catch (err) {
+      message.style.color = '#b42318';
+      message.textContent =
+        'Reset password gagal: ' +
+        (err.message || 'Kesalahan tidak diketahui');
+
+      button.disabled = false;
+      button.textContent = 'Simpan Password Baru';
+    }
+  });
+}
     function showCreateForm() {
       editor.innerHTML = `
         <section class="master-editor">
