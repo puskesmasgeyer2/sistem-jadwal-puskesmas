@@ -2,7 +2,7 @@ const SUPABASE_URL="https://xqeuklqhkslfvhqrhyyr.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY="sb_publishable_2hvrRkMS3sZ9CvyHHNdgFA_vsKJj8Mn";
 const client=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
 const $=id=>document.getElementById(id);let currentProfile=null,currentUser=null,currentPage=sessionStorage.getItem('jadwalCurrentPage')||'home',allSchedules=[],currentPageNumber=1,pageSize=10,masterCache={programs:[],staff:[],places:[]},masterType='programs';
-const pageInfo={home:['Beranda','Ringkasan dan daftar jadwal kegiatan'],input:['Input Jadwal','Tambahkan jadwal kegiatan baru'],program:['Program','Daftar program kegiatan'],staff:['Staff / Petugas','Daftar petugas terdaftar'],places:['Tempat','Daftar tempat kegiatan'],calendar:['Kalender','Kalender kerja dan kebijakan tanggal'],settings:['Pengaturan','Pengaturan akun dan akses pengguna']};
+const pageInfo={home:['Beranda','Ringkasan dan daftar jadwal kegiatan'],input:['Input Jadwal','Tambahkan jadwal kegiatan baru'],program:['Program','Daftar program kegiatan'],staff:['Staff / Petugas','Daftar petugas terdaftar'],places:['Tempat','Daftar tempat kegiatan'],calendar:['Kalender','Kalender kerja dan kebijakan tanggal'],accounts:['Pengelolaan Akun', 'Kelola akun operator dan petugas'],settings:['Pengaturan','Pengaturan akun dan akses pengguna']};
 function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
 function msg(t,error=false){$('dashboardMessage').textContent=t||'';$('dashboardMessage').style.color=error?'#b42318':'#087f5b'}
 function setPage(page){
@@ -21,6 +21,37 @@ function setPage(page){
   msg('');
   renderPage(page);
 }
+
+function ensureAccountNav(isAdmin) {
+  const sidebar = $('sidebar');
+  const settingsButton = sidebar.querySelector(
+    '.nav-btn[data-page="settings"]'
+  );
+  let button = sidebar.querySelector(
+    '.nav-btn[data-page="accounts"]'
+  );
+
+  if (!isAdmin) {
+    button?.remove();
+    return;
+  }
+
+  if (!button) {
+    button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'nav-btn';
+    button.dataset.page = 'accounts';
+    button.textContent = '♙ Pengelolaan Akun';
+    button.addEventListener('click', () => setPage('accounts'));
+
+    if (settingsButton) {
+      sidebar.insertBefore(button, settingsButton);
+    } else {
+      sidebar.appendChild(button);
+    }
+  }
+}
+
 function fallbackLogo(){const svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M50 3 91 26v48L50 97 9 74V26Z" fill="#fff" stroke="#075c43" stroke-width="5"/><path d="M40 19h20v21h21v20H60v21H40V60H19V40h21Z" fill="#087f5b"/><circle cx="58" cy="49" r="8" fill="none" stroke="#fff" stroke-width="2"/><circle cx="70" cy="49" r="8" fill="none" stroke="#fff" stroke-width="2"/></svg>';$('headerLogo').src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)}
 $('headerLogo').addEventListener('error',fallbackLogo);$('togglePassword').addEventListener('click',()=>{const p=$('password');p.type=p.type==='password'?'text':'password';$('togglePassword').textContent=p.type==='password'?'Lihat':'Sembunyikan'});
 async function showSession(session){
@@ -42,7 +73,7 @@ async function showSession(session){
   }
 
   currentUser=session.user;
-const {data,error}=await client.from('profiles').select('full_name,role,staff_id,is_active').eq('id',session.user.id).maybeSingle();if(error||!data||!data.is_active){await client.auth.signOut();$('message').textContent='Profil belum tersedia atau akun belum aktif. Hubungi administrator.';return}currentProfile=data;$('loginCard').classList.add('hidden');$('dashboardCard').classList.remove('hidden');$('sideProfile').innerHTML=esc(data.full_name||'Pengguna')+'<small id="sideRole">'+esc(data.role||'petugas')+'</small>';$('roleChip').textContent=(data.role||'petugas').toUpperCase();const savedPage=sessionStorage.getItem('jadwalCurrentPage')||'home';
+const {data,error}=await client.from('profiles').select('full_name,role,staff_id,is_active').eq('id',session.user.id).maybeSingle();if(error||!data||!data.is_active){await client.auth.signOut();$('message').textContent='Profil belum tersedia atau akun belum aktif. Hubungi administrator.';return}currentProfile=data;$('loginCard').classList.add('hidden');$('dashboardCard').classList.remove('hidden');$('sideProfile').innerHTML=esc(data.full_name||'Pengguna')+'<small id="sideRole">'+esc(data.role||'petugas')+'</small>';$('roleChip').textContent=(data.role||'petugas').toUpperCase();ensureAccountNav(data.role === 'admin');const savedPage=sessionStorage.getItem('jadwalCurrentPage')||'home';
 setPage(pageInfo[savedPage]?savedPage:'home');}
 $('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginButton').disabled=true;$('loginButton').textContent='Memeriksa akun...';$('message').textContent='';try{const {data,error}=await client.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});if(error)throw error;await showSession(data.session)}catch(e){$('message').textContent='Login gagal. Periksa email, password, dan koneksi.'}finally{$('loginButton').disabled=false;$('loginButton').textContent='Masuk'}});
 $('logoutButton').addEventListener('click',async()=>{const {error}=await client.auth.signOut();if(error){msg('Gagal keluar. Silakan coba lagi.',true);return}msg('');$('message').textContent='';await showSession(null)});$('mobileMenu').addEventListener('click',()=>$('sidebar').classList.toggle('open'));document.querySelectorAll('.nav-btn[data-page]').forEach(b=>b.addEventListener('click',()=>setPage(b.dataset.page)));
@@ -185,5 +216,312 @@ function showMasterEditor(type,item){
 }
 async function renderCalendar(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat kalender...</div>';const year=new Date().getFullYear();try{const {data,error}=await client.from('calendar_days').select('calendar_date,day_description,day_type,schedule_policy,verification_status').gte('calendar_date',year+'-01-01').lt('calendar_date',(year+1)+'-01-01').order('calendar_date').limit(400);if(error)throw error;c.innerHTML=`<div class="welcome-row"><div><h3>Kalender ${year}</h3><p>Jadwal mengikuti kebijakan tanggal yang tersimpan di database.</p></div></div><section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Tanggal</th><th>Hari</th><th>Keterangan</th><th>Jenis hari</th><th>Kebijakan</th><th>Verifikasi</th></tr></thead><tbody>${(data||[]).map(d=>`<tr><td>${esc(d.calendar_date)}</td><td>${new Date(d.calendar_date+'T12:00:00').toLocaleDateString('id-ID',{weekday:'long',timeZone:'Asia/Jakarta'})}</td><td>${esc(d.day_description||'-')}</td><td>${esc(d.day_type)}</td><td><span class="badge ${d.schedule_policy==='block'?'block':d.schedule_policy==='warning'?'warning':''}">${esc(d.schedule_policy)}</span></td><td>${esc(d.verification_status)}</td></tr>`).join('')||'<tr><td colspan="6">Belum ada data kalender.</td></tr>'}</tbody></table></div></section>`}catch(e){c.innerHTML=`<section class="panel"><h3>Kalender gagal dimuat</h3><div class="notice warn">${esc(e.message||'Periksa izin tabel calendar_days.')}</div></section>`}}
 function renderSettings(){const c=$('dashboardContent');c.innerHTML=`<div class="welcome-row"><div><h3>Pengaturan</h3><p>Pengaturan akun yang dapat dilakukan dengan aman dari aplikasi.</p></div></div><div class="settings-grid"><section class="setting-card"><h3>Ubah password</h3><p>Gunakan password baru yang kuat dan tidak dipakai di layanan lain.</p><form id="passwordForm"><label for="newPassword">Password baru</label><input id="newPassword" type="password" minlength="8" autocomplete="new-password" required placeholder="Minimal 8 karakter"><label for="confirmPassword">Ulangi password</label><input id="confirmPassword" type="password" minlength="8" autocomplete="new-password" required placeholder="Ulangi password baru"><button type="submit">Ubah Password</button><div id="passwordMessage" role="status"></div></form></section><section class="setting-card"><h3>Profil dan role akses</h3><p>Nama: <strong>${esc(currentProfile?.full_name||'-')}</strong><br>Role: <strong>${esc(currentProfile?.role||'-')}</strong><br>Email: <strong>${esc(currentUser?.email||'-')}</strong></p><div class="notice warn">Perubahan role dan pengelolaan akun pengguna belum dibuka dari antarmuka ini. Role harus diubah melalui proses admin yang tervalidasi di Supabase, bukan langsung dari browser.</div></section><section class="setting-card"><h3>Aturan jadwal</h3><p>Minggu dan tanggal berkebijakan <em>block</em> ditolak. Sabtu atau tanggal berkebijakan <em>warning</em> memerlukan konfirmasi.</p><button type="button" id="settingsCalendar">Lihat Kalender</button></section><section class="setting-card"><h3>Sesi login</h3><p>Jika menggunakan komputer bersama, keluar setelah selesai mengelola jadwal.</p><button type="button" class="secondary" id="settingsLogout">Keluar dari akun</button></section></div>`;$('passwordForm').addEventListener('submit',async e=>{e.preventDefault();const a=$('newPassword').value,b=$('confirmPassword').value,m=$('passwordMessage');m.style.color='#b42318';if(a.length<8){m.textContent='Password minimal 8 karakter.';return}if(a!==b){m.textContent='Password baru dan konfirmasi tidak sama.';return}const {error}=await client.auth.updateUser({password:a});if(error){m.textContent='Password gagal diubah: '+error.message;return}m.style.color='#087f5b';m.textContent='Password berhasil diubah.';$('passwordForm').reset()});$('settingsCalendar').addEventListener('click',()=>setPage('calendar'));$('settingsLogout').addEventListener('click',()=>$('logoutButton').click())}
-function renderPage(page){if(page==='home')return renderHome();if(page==='input')return renderInput();if(page==='program')return renderMaster('programs');if(page==='staff')return renderMaster('staff');if(page==='places')return renderMaster('places');if(page==='calendar')return renderCalendar();if(page==='settings')return renderSettings()}
+async function renderAccounts() {
+  const c = $('dashboardContent');
+
+  if (currentProfile?.role !== 'admin') {
+    c.innerHTML = '<section class="panel">Akses khusus administrator.</section>';
+    return;
+  }
+
+  c.innerHTML = '<div class="loading">Memuat akun...</div>';
+
+  try {
+    await loadMasters();
+
+    const result = await client.functions.invoke('admin-manage-user', {
+      body: { action: 'list' }
+    });
+
+    if (result.error) {
+      throw new Error(
+        result.data?.error || result.error.message ||
+        'Gagal menghubungi fungsi pengelolaan akun.'
+      );
+    }
+
+    if (!result.data?.success) {
+      throw new Error(result.data?.error || 'Gagal memuat akun.');
+    }
+
+    const accounts = result.data.accounts || [];
+
+    c.innerHTML = `
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Daftar Akun</h3>
+          <button type="button" id="showCreateAccount">
+            + Tambah Akun
+          </button>
+        </div>
+
+        <div id="accountMessage" role="status" aria-live="polite"></div>
+        <div id="accountEditor"></div>
+
+        <div class="master-toolbar">
+          <div>
+            <label for="accountSearch">Cari akun</label>
+            <input id="accountSearch" type="search"
+              placeholder="Nama, email, role, atau petugas">
+          </div>
+        </div>
+
+        <div id="accountTable"></div>
+      </section>
+    `;
+
+    const editor = $('accountEditor');
+    const message = $('accountMessage');
+    const table = $('accountTable');
+
+    function drawAccounts() {
+      const q = $('accountSearch').value.trim().toLowerCase();
+
+      const rows = accounts.filter(a =>
+        [
+          a.full_name,
+          a.email,
+          a.role,
+          a.staff_name
+        ].some(v => String(v || '').toLowerCase().includes(q))
+      );
+
+      table.innerHTML = rows.length
+        ? `<div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Nama</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Petugas</th>
+                  <th>Status</th>
+                  <th>Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map(a => `
+                  <tr>
+                    <td>${esc(a.full_name)}</td>
+                    <td>${esc(a.email || '-')}</td>
+                    <td>${esc(a.role)}</td>
+                    <td>${esc(a.staff_name || '-')}</td>
+                    <td>${a.is_active ? 'Aktif' : 'Nonaktif'}</td>
+                    <td>
+                      ${a.id === currentUser.id
+                        ? '<span class="muted">Akun Anda</span>'
+                        : `<button type="button"
+                            class="small-btn ${a.is_active ? 'danger-btn' : ''}"
+                            data-account-id="${esc(a.id)}"
+                            data-active="${a.is_active ? 'true' : 'false'}">
+                            ${a.is_active ? 'Nonaktifkan' : 'Aktifkan'}
+                          </button>`
+                      }
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>`
+        : '<div class="empty">Tidak ada akun yang cocok.</div>';
+
+      table.querySelectorAll('[data-account-id]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.dataset.accountId;
+          const nextActive = btn.dataset.active !== 'true';
+          const account = accounts.find(a => a.id === id);
+
+          if (!account) return;
+
+          const actionText = nextActive ? 'mengaktifkan' : 'menonaktifkan';
+
+          if (!confirm(
+            `Yakin ingin ${actionText} akun ${account.full_name}?`
+          )) return;
+
+          btn.disabled = true;
+          message.textContent = 'Memproses perubahan status...';
+
+          try {
+            const response = await client.functions.invoke(
+              'admin-manage-user',
+              {
+                body: {
+                  action: 'set_active',
+                  user_id: id,
+                  is_active: nextActive
+                }
+              }
+            );
+
+            if (response.error) {
+              throw new Error(
+                response.data?.error || response.error.message
+              );
+            }
+
+            if (!response.data?.success) {
+              throw new Error(
+                response.data?.error || 'Status akun gagal diubah.'
+              );
+            }
+
+            await renderAccounts();
+            msg('Status akun berhasil diperbarui.');
+            return;
+          } catch (err) {
+            message.style.color = '#b42318';
+            message.textContent =
+              'Gagal mengubah status: ' + (err.message || 'Kesalahan');
+            btn.disabled = false;
+          }
+        });
+      });
+    }
+
+    function showCreateForm() {
+      editor.innerHTML = `
+        <section class="master-editor">
+          <h3>Tambah Akun Baru</h3>
+          <form id="createAccountForm">
+            <div class="form-grid">
+              <div>
+                <label for="accountName">Nama lengkap *</label>
+                <input id="accountName" required maxlength="160">
+              </div>
+              <div>
+                <label for="accountEmail">Email login *</label>
+                <input id="accountEmail" type="email" required
+                  autocomplete="off">
+              </div>
+              <div>
+                <label for="accountPassword">Password awal *</label>
+                <input id="accountPassword" type="password"
+                  minlength="12" required autocomplete="new-password">
+                <small>Minimal 12 karakter.</small>
+              </div>
+              <div>
+                <label for="accountRole">Role *</label>
+                <select id="accountRole" required>
+                  <option value="operator">Operator</option>
+                  <option value="petugas">Petugas</option>
+                </select>
+              </div>
+              <div id="staffSelectWrap" style="display:none">
+                <label for="accountStaff">Hubungkan ke petugas *</label>
+                <select id="accountStaff">
+                  <option value="">Pilih petugas</option>
+                  ${masterCache.staff.map(s => `
+                    <option value="${esc(s.id)}">
+                      ${esc(s.full_name)}${s.employee_code
+                        ? ' — ' + esc(s.employee_code) : ''}
+                    </option>
+                  `).join('')}
+                </select>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button type="button" class="secondary" id="cancelCreateAccount">
+                Batal
+              </button>
+              <button type="submit" id="saveAccountButton">
+                Buat Akun
+              </button>
+            </div>
+          </form>
+        </section>
+      `;
+
+      const role = $('accountRole');
+      const staffWrap = $('staffSelectWrap');
+      const staffSelect = $('accountStaff');
+
+      function updateStaffField() {
+        const isPetugas = role.value === 'petugas';
+        staffWrap.style.display = isPetugas ? '' : 'none';
+        staffSelect.required = isPetugas;
+        if (!isPetugas) staffSelect.value = '';
+      }
+
+      role.addEventListener('change', updateStaffField);
+      updateStaffField();
+
+      $('cancelCreateAccount').addEventListener('click', () => {
+        editor.innerHTML = '';
+      });
+
+      $('createAccountForm').addEventListener('submit', async e => {
+        e.preventDefault();
+
+        const btn = $('saveAccountButton');
+        const password = $('accountPassword').value;
+
+        if (password.length < 12) {
+          message.style.color = '#b42318';
+          message.textContent = 'Password minimal 12 karakter.';
+          return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Membuat akun...';
+        message.textContent = '';
+
+        try {
+          const response = await client.functions.invoke(
+            'admin-manage-user',
+            {
+              body: {
+                action: 'create',
+                full_name: $('accountName').value.trim(),
+                email: $('accountEmail').value.trim(),
+                password,
+                role: role.value,
+                staff_id: role.value === 'petugas'
+                  ? staffSelect.value : null
+              }
+            }
+          );
+
+          if (response.error) {
+            throw new Error(
+              response.data?.error || response.error.message
+            );
+          }
+
+          if (!response.data?.success) {
+            throw new Error(
+              response.data?.error || 'Akun gagal dibuat.'
+            );
+          }
+
+          await renderAccounts();
+          msg('Akun baru berhasil dibuat.');
+        } catch (err) {
+          message.style.color = '#b42318';
+          message.textContent =
+            'Akun belum dibuat: ' + (err.message || 'Kesalahan');
+          btn.disabled = false;
+          btn.textContent = 'Buat Akun';
+        }
+      });
+    }
+
+    $('accountSearch').addEventListener('input', drawAccounts);
+    $('showCreateAccount').addEventListener('click', showCreateForm);
+
+    drawAccounts();
+  } catch (err) {
+    c.innerHTML = `
+      <section class="panel">
+        <h3>Daftar akun gagal dimuat</h3>
+        <div class="notice warn">${esc(err.message || 'Kesalahan tidak diketahui')}</div>
+        <button type="button" id="retryAccounts">Coba Lagi</button>
+      </section>
+    `;
+
+    $('retryAccounts').addEventListener('click', renderAccounts);
+  }
+}
+
+function renderPage(page){if(page==='home')return renderHome();if(page==='input')return renderInput();if(page==='program')return renderMaster('programs');if(page==='staff')return renderMaster('staff');if(page==='places')return renderMaster('places');if(page==='calendar')return renderCalendar();if (page === 'accounts') return renderAccounts();if(page==='settings')return renderSettings()}
 client.auth.onAuthStateChange((_event,session)=>{showSession(session)});client.auth.getSession().then(({data,error})=>{if(error){$('message').textContent='Sesi tidak dapat diperiksa. Muat ulang halaman.';return}showSession(data.session)});
