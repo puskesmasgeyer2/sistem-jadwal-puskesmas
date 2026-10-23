@@ -571,39 +571,63 @@ function renderImport() {
   const normalize = value =>
     String(value ?? '').trim().toLocaleLowerCase('id-ID');
 
-  function parseImportDate(value) {
-    if (value instanceof Date && !isNaN(value)) {
-      return [
-        value.getFullYear(),
-        String(value.getMonth() + 1).padStart(2, '0'),
-        String(value.getDate()).padStart(2, '0')
-      ].join('-');
-    }
+  
+function parseImportDate(value) {
+  // Jika Excel memberikan objek Date, ambil tanggal lokal.
+  if (value instanceof Date && !isNaN(value)) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
 
-    const s = String(value ?? '').trim();
-
-    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    if (m) {
-      const d = new Date(+m[1], +m[2] - 1, +m[3]);
-      if (
-        d.getFullYear() === +m[1] &&
-        d.getMonth() === +m[2] - 1 &&
-        d.getDate() === +m[3]
-      ) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
-    }
-
-    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (m) {
-      const d = new Date(+m[3], +m[2] - 1, +m[1]);
-      if (
-        d.getFullYear() === +m[3] &&
-        d.getMonth() === +m[2] - 1 &&
-        d.getDate() === +m[1]
-      ) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
-    }
-
-    return null;
+    return `${year}-${month}-${day}`;
   }
+
+  // Jika Excel memberikan angka serial tanggal.
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = XLSX.SSF.parse_date_code(value);
+
+    if (!date) return null;
+
+    const year = date.y;
+    const month = String(date.m).padStart(2, '0');
+    const day = String(date.d).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+  }
+
+  const s = String(value ?? '').trim();
+
+  // Format YYYY-MM-DD.
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) {
+    const d = new Date(+m[1], +m[2] - 1, +m[3]);
+
+    if (
+      d.getFullYear() === +m[1] &&
+      d.getMonth() === +m[2] - 1 &&
+      d.getDate() === +m[3]
+    ) {
+      return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    }
+  }
+
+  // Format DD/MM/YYYY.
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const d = new Date(+m[3], +m[2] - 1, +m[1]);
+
+    if (
+      d.getFullYear() === +m[3] &&
+      d.getMonth() === +m[2] - 1 &&
+      d.getDate() === +m[1]
+    ) {
+      return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    }
+  }
+
+  return null;
+}
+
 
   $('checkImport').addEventListener('click', async () => {
     preparedRows = [];
@@ -633,8 +657,8 @@ function renderImport() {
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, {
         type: 'array',
-        cellDates: true
-      });
+        cellDates: false
+        });
 
       const sheet = workbook.Sheets['Jadwal'];
 
