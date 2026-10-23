@@ -2,7 +2,7 @@ const SUPABASE_URL="https://xqeuklqhkslfvhqrhyyr.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY="sb_publishable_2hvrRkMS3sZ9CvyHHNdgFA_vsKJj8Mn";
 const client=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
 const $=id=>document.getElementById(id);let currentProfile=null,currentUser=null,currentPage=sessionStorage.getItem('jadwalCurrentPage')||'home',allSchedules=[],currentPageNumber=1,pageSize=10,masterCache={programs:[],staff:[],places:[]},masterType='programs';
-const pageInfo={home:['Beranda','Ringkasan dan daftar jadwal kegiatan'],input:['Input Jadwal','Tambahkan jadwal kegiatan baru'],program:['Program','Daftar program kegiatan'],staff:['Staff / Petugas','Daftar petugas terdaftar'],places:['Tempat','Daftar tempat kegiatan'],calendar:['Kalender','Kalender kerja dan kebijakan tanggal'],accounts:['Pengelolaan Akun', 'Kelola akun operator dan petugas'],settings:['Pengaturan','Pengaturan akun dan akses pengguna']};
+const pageInfo={home:['Beranda','Ringkasan dan daftar jadwal kegiatan'],input:['Input Jadwal','Tambahkan jadwal kegiatan baru'],import: ['Import Excel', 'Impor jadwal kegiatan dari file Excel'],program:['Program','Daftar program kegiatan'],staff:['Staff / Petugas','Daftar petugas terdaftar'],places:['Tempat','Daftar tempat kegiatan'],calendar:['Kalender','Kalender kerja dan kebijakan tanggal'],accounts:['Pengelolaan Akun', 'Kelola akun operator dan petugas'],settings:['Pengaturan','Pengaturan akun dan akses pengguna']};
 function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
 function msg(t,error=false){$('dashboardMessage').textContent=t||'';$('dashboardMessage').style.color=error?'#b42318':'#087f5b'}
 function setPage(page){
@@ -523,5 +523,381 @@ async function renderAccounts() {
   }
 }
 
-function renderPage(page){if(page==='home')return renderHome();if(page==='input')return renderInput();if(page==='program')return renderMaster('programs');if(page==='staff')return renderMaster('staff');if(page==='places')return renderMaster('places');if(page==='calendar')return renderCalendar();if (page === 'accounts') return renderAccounts();if(page==='settings')return renderSettings()}
+function renderImport() {
+  const c = $('dashboardContent');
+
+  c.innerHTML = `
+    <div class="welcome-row">
+      <div>
+        <h3>Import Jadwal dari Excel</h3>
+        <p>Unggah file .xlsx untuk menambahkan banyak jadwal sekaligus.</p>
+      </div>
+    </div>
+
+    <section class="panel">
+      <div class="notice">
+        Format kolom: Tanggal, Nama Program, Nama Petugas,
+        Nama Tempat, Catatan. Nama harus sesuai dengan data master aktif.
+      </div>
+
+      <p>
+        <a href="template_import_jadwal_puskesmas.xlsx"
+           download="template_import_jadwal_puskesmas.xlsx">
+          Unduh Template Excel
+        </a>
+      </p>
+
+      <label for="importFile">Pilih file Excel (.xlsx)</label>
+      <input id="importFile" type="file"
+             accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+
+      <div class="form-actions">
+        <button type="button" id="checkImport">Periksa File</button>
+      </div>
+
+      <div id="importMessage" role="status" aria-live="polite"></div>
+      <div id="importPreview"></div>
+    </section>
+  `;
+
+  let preparedRows = [];
+
+  const message = (text, error = false) => {
+    const el = $('importMessage');
+    el.style.color = error ? '#b42318' : '#087f5b';
+    el.textContent = text;
+  };
+
+  const normalize = value =>
+    String(value ?? '').trim().toLocaleLowerCase('id-ID');
+
+  function parseImportDate(value) {
+    if (value instanceof Date && !isNaN(value)) {
+      return [
+        value.getFullYear(),
+        String(value.getMonth() + 1).padStart(2, '0'),
+        String(value.getDate()).padStart(2, '0')
+      ].join('-');
+    }
+
+    const s = String(value ?? '').trim();
+
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) {
+      const d = new Date(+m[1], +m[2] - 1, +m[3]);
+      if (
+        d.getFullYear() === +m[1] &&
+        d.getMonth() === +m[2] - 1 &&
+        d.getDate() === +m[3]
+      ) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    }
+
+    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m) {
+      const d = new Date(+m[3], +m[2] - 1, +m[1]);
+      if (
+        d.getFullYear() === +m[3] &&
+        d.getMonth() === +m[2] - 1 &&
+        d.getDate() === +m[1]
+      ) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    }
+
+    return null;
+  }
+
+  $('checkImport').addEventListener('click', async () => {
+    preparedRows = [];
+    $('importPreview').innerHTML = '';
+
+    const file = $('importFile').files[0];
+
+    if (!file) {
+      message('Pilih file Excel terlebih dahulu.', true);
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      message('Gunakan file Excel berformat .xlsx.', true);
+      return;
+    }
+
+    if (typeof XLSX === 'undefined') {
+      message('Pustaka Excel belum termuat. Periksa koneksi internet dan script XLSX di index.html.', true);
+      return;
+    }
+
+    const btn = $('checkImport');
+    btn.disabled = true;
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, {
+        type: 'array',
+        cellDates: true
+      });
+
+      const sheet = workbook.Sheets['Jadwal'];
+
+      if (!sheet) {
+        throw new Error('Sheet bernama "Jadwal" tidak ditemukan.');
+      }
+
+      const data = XLSX.utils.sheet_to_json(sheet, {
+        defval: '',
+        raw: true
+      });
+
+      if (!data.length) {
+        throw new Error('Sheet Jadwal belum berisi data.');
+      }
+
+      const requiredHeaders = [
+        'Tanggal',
+        'Nama Program',
+        'Nama Petugas',
+        'Nama Tempat',
+        'Catatan'
+      ];
+
+      const actualHeaders = Object.keys(data[0]);
+
+      const missing = requiredHeaders.filter(
+        h => !actualHeaders.includes(h)
+      );
+
+      if (missing.length) {
+        throw new Error('Kolom tidak sesuai template. Kolom yang tidak ditemukan: ' + missing.join(', '));
+      }
+
+      await loadMasters();
+
+      const programs = new Map(
+        masterCache.programs.map(x => [normalize(x.program_name), x])
+      );
+
+      const staff = new Map(
+        masterCache.staff.map(x => [normalize(x.full_name), x])
+      );
+
+      const places = new Map(
+        masterCache.places.map(x => [normalize(x.place_name), x])
+      );
+
+      const errors = [];
+      const warnings = [];
+      const seen = new Set();
+
+      data.forEach((row, index) => {
+        const excelRow = index + 2;
+        const rawValues = requiredHeaders.map(h => String(row[h] ?? '').trim());
+
+        // Lewati baris kosong.
+        if (rawValues.every(v => !v)) return;
+
+        // Baris contoh template harus dihapus; dilewati agar tidak masuk jadwal.
+        if (rawValues.some(v => v.toUpperCase().startsWith('CONTOH:'))) {
+          return;
+        }
+
+        const date = parseImportDate(row['Tanggal']);
+        const program = programs.get(normalize(row['Nama Program']));
+        const person = staff.get(normalize(row['Nama Petugas']));
+        const place = places.get(normalize(row['Nama Tempat']));
+        const notes = String(row['Catatan'] ?? '').trim();
+
+        const rowErrors = [];
+
+        if (!date) rowErrors.push('Tanggal tidak valid');
+        if (!program) rowErrors.push('Nama program tidak ditemukan atau tidak aktif');
+        if (!person) rowErrors.push('Nama petugas tidak ditemukan atau tidak aktif');
+        if (!place) rowErrors.push('Nama tempat tidak ditemukan atau tidak aktif');
+        if (notes.length > 500) rowErrors.push('Catatan melebihi 500 karakter');
+
+        if (date && new Date(date + 'T12:00:00').getDay() === 0) {
+          rowErrors.push('Hari Minggu tidak diperbolehkan');
+        }
+
+        if (
+          currentProfile?.role === 'petugas' &&
+          person &&
+          person.id !== currentProfile.staff_id
+        ) {
+          rowErrors.push('Petugas hanya boleh mengimpor jadwal untuk dirinya sendiri');
+        }
+
+        if (date && person) {
+          const key = `${date}|${person.id}`;
+
+          if (seen.has(key)) {
+            rowErrors.push('Petugas yang sama muncul lebih dari sekali pada tanggal ini di file');
+          }
+
+          seen.add(key);
+        }
+
+        if (rowErrors.length) {
+          errors.push(`Baris ${excelRow}: ${rowErrors.join('; ')}`);
+          return;
+        }
+
+        preparedRows.push({
+          excelRow,
+          activity_date: date,
+          program_id: program.id,
+          staff_id: person.id,
+          place_id: place.id,
+          notes: notes || null,
+          status: 'valid'
+        });
+      });
+
+      if (!preparedRows.length) {
+        message(
+          'Tidak ada baris jadwal yang siap diimpor. Pastikan baris contoh sudah dihapus dan data terisi.',
+          true
+        );
+        $('importPreview').innerHTML = errors.length
+          ? `<div class="notice warn">${errors.map(esc).join('<br>')}</div>`
+          : '';
+        return;
+      }
+
+      // Periksa kalender dan jadwal yang sudah ada sebelum menyimpan.
+      const checkedRows = [];
+
+      for (const row of preparedRows) {
+        const { data: day, error: dayError } = await client
+          .from('calendar_days')
+          .select('day_description,schedule_policy')
+          .eq('calendar_date', row.activity_date)
+          .maybeSingle();
+
+        if (dayError) throw dayError;
+
+        if (!day) {
+          errors.push(`Baris ${row.excelRow}: tanggal tidak ditemukan di kalender`);
+          continue;
+        }
+
+        if (day.schedule_policy === 'block') {
+          errors.push(`Baris ${row.excelRow}: tanggal diblokir (${day.day_description || row.activity_date})`);
+          continue;
+        }
+
+        const { data: duplicate, error: duplicateError } = await client
+          .from('schedules')
+          .select('id')
+          .eq('activity_date', row.activity_date)
+          .eq('staff_id', row.staff_id)
+          .limit(1);
+
+        if (duplicateError) throw duplicateError;
+
+        if (duplicate?.length) {
+          errors.push(`Baris ${row.excelRow}: petugas sudah memiliki jadwal pada tanggal tersebut`);
+          continue;
+        }
+
+        const dow = new Date(row.activity_date + 'T12:00:00').getDay();
+
+        if (dow === 6 || day.schedule_policy === 'warning') {
+          warnings.push(
+            `Baris ${row.excelRow}: ${row.activity_date} memerlukan konfirmasi`
+          );
+        }
+
+        checkedRows.push(row);
+      }
+
+      preparedRows = checkedRows;
+
+      $('importPreview').innerHTML = `
+        <div class="notice">
+          <strong>Ringkasan pemeriksaan</strong><br>
+          Siap diimpor: ${preparedRows.length} baris<br>
+          Baris bermasalah: ${errors.length}<br>
+          Perlu konfirmasi tanggal: ${warnings.length}
+        </div>
+        ${errors.length
+          ? `<div class="notice warn"><strong>Perbaiki baris berikut:</strong><br>${errors.map(esc).join('<br>')}</div>`
+          : ''}
+        ${warnings.length
+          ? `<div class="notice warn">${warnings.map(esc).join('<br>')}</div>`
+          : ''}
+        <button type="button" id="executeImport" ${preparedRows.length ? '' : 'disabled'}>
+          Simpan ${preparedRows.length} Jadwal
+        </button>
+      `;
+
+      message('Pemeriksaan selesai. Periksa ringkasan sebelum menyimpan.');
+
+      $('executeImport').addEventListener('click', async () => {
+        if (!preparedRows.length) return;
+
+        if (errors.length) {
+          message('Ada baris bermasalah. Perbaiki file dan periksa ulang sebelum mengimpor.', true);
+          return;
+        }
+
+        if (warnings.length && !confirm(
+          'Ada jadwal pada hari Sabtu atau tanggal peringatan. Tetap lanjutkan impor?'
+        )) return;
+
+        if (!confirm(`Simpan ${preparedRows.length} jadwal ke aplikasi?`)) return;
+
+        const saveBtn = $('executeImport');
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Menyimpan...';
+
+        let success = 0;
+        const failures = [];
+
+        for (const row of preparedRows) {
+          const { excelRow, ...payload } = row;
+
+          const { error } = await client
+            .from('schedules')
+            .insert(payload);
+
+          if (error) {
+            let detail = error.message || 'Kesalahan tidak diketahui';
+
+            if (/duplicate key|unique constraint/i.test(detail)) {
+              detail = 'Petugas sudah memiliki jadwal pada tanggal tersebut';
+            } else if (/row-level security|permission denied/i.test(detail)) {
+              detail = 'Akun tidak memiliki izin menyimpan jadwal ini';
+            }
+
+            failures.push(`Baris ${excelRow}: ${detail}`);
+          } else {
+            success++;
+          }
+        }
+
+        $('importPreview').innerHTML = `
+          <div class="notice">
+            Impor selesai. Berhasil disimpan: ${success}.
+            Gagal disimpan: ${failures.length}.
+          </div>
+          ${failures.length
+            ? `<div class="notice warn">${failures.map(esc).join('<br>')}</div>`
+            : ''}
+          <button type="button" id="backToSchedule">Lihat Jadwal</button>
+        `;
+
+        message('Proses impor selesai.');
+
+        $('backToSchedule').addEventListener('click', () => setPage('home'));
+      });
+
+    } catch (err) {
+      message('File belum dapat diperiksa: ' + (err.message || 'Kesalahan tidak diketahui'), true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Periksa File';
+    }
+  });
+}
+
+function renderPage(page){if(page==='home')return renderHome();if(page==='input')return renderInput();if (page === 'import') return renderImport();if(page==='program')return renderMaster('programs');if(page==='staff')return renderMaster('staff');if(page==='places')return renderMaster('places');if(page==='calendar')return renderCalendar();if (page === 'accounts') return renderAccounts();if(page==='settings')return renderSettings()}
 client.auth.onAuthStateChange((_event,session)=>{showSession(session)});client.auth.getSession().then(({data,error})=>{if(error){$('message').textContent='Sesi tidak dapat diperiksa. Muat ulang halaman.';return}showSession(data.session)});
