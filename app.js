@@ -504,27 +504,28 @@ async function renderAccounts() {
               <tbody>
                 ${rows.map(a => `
                   <tr>
+                    <td>${esc(a.full_name || '-')}</td>
+                    <td>${esc(a.email || '-')}</td>
+                    <td>${esc(a.role || '-')}</td>
+                    <td>${esc(a.staff_name || '-')}</td>
+                    <td><span class="badge ${a.is_active ? '' : 'danger-btn'}">${a.is_active ? 'Aktif' : 'Nonaktif'}</span></td>
                     <td>
-  <div class="row-actions">
-    ${a.id === currentUser.id
-      ? '<span class="muted">Akun Anda</span>'
-      : `<button type="button"
-          class="small-btn ${a.is_active ? 'danger-btn' : ''}"
-          data-account-id="${esc(a.id)}"
-          data-active="${a.is_active ? 'true' : 'false'}">
-          ${a.is_active ? 'Nonaktifkan' : 'Aktifkan'}
-        </button>`
-    }
-
-    ${['operator', 'petugas'].includes(a.role)
-      ? `<button type="button"
-          class="small-btn"
-          data-reset-account-id="${esc(a.id)}">
-          Reset Password
-        </button>`
-      : ''}
-  </div>
-</td>
+                      <div class="row-actions">
+                        ${a.id === currentUser.id
+                          ? '<span class="muted">Akun Anda</span>'
+                          : `<button type="button"
+                              class="small-btn ${a.is_active ? 'danger-btn' : ''}"
+                              data-account-id="${esc(a.id)}"
+                              data-active="${a.is_active ? 'true' : 'false'}">
+                              ${a.is_active ? 'Nonaktifkan' : 'Aktifkan'}
+                            </button>`
+                        }
+                        ${['operator', 'petugas'].includes(a.role)
+                          ? `<button type="button" class="small-btn"
+                              data-reset-account-id="${esc(a.id)}">Reset Password</button>`
+                          : ''}
+                      </div>
+                    </td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -548,19 +549,6 @@ async function renderAccounts() {
 
           btn.disabled = true;
           message.textContent = 'Memproses perubahan status...';
-
-      table.querySelectorAll('[data-reset-account-id]')
-  .forEach(btn => {
-    btn.addEventListener('click', () => {
-      const account = accounts.find(
-        a => a.id === btn.dataset.resetAccountId
-      );
-
-      if (!account) return;
-
-      showResetPasswordForm(account);
-    });
-  });
 
           try {
             const response = await client.functions.invoke(
@@ -597,8 +585,16 @@ async function renderAccounts() {
           }
         });
       });
+
+      table.querySelectorAll('[data-reset-account-id]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const account = accounts.find(a => a.id === btn.dataset.resetAccountId);
+          if (account) showResetPasswordForm(account, editor, message);
+        });
+      });
     }
-function showResetPasswordForm(account) {
+
+function showResetPasswordForm(account, editor, message) {
   editor.innerHTML = `
     <section class="master-editor">
       <h3>Reset Password Akun</h3>
