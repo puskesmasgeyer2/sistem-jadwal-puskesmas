@@ -20,7 +20,6 @@ function stopSessionGuard() {
     sessionGuardTimer = null;
   }
   sessionStartedAt = 0;
-  sessionEnding = false;
 }
 
 function recordSessionActivity() {
