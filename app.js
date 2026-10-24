@@ -2,6 +2,107 @@ const SUPABASE_URL="https://xqeuklqhkslfvhqrhyyr.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY="sb_publishable_2hvrRkMS3sZ9CvyHHNdgFA_vsKJj8Mn";
 const client=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
 const $=id=>document.getElementById(id);let currentProfile=null,currentUser=null,currentPage=sessionStorage.getItem('jadwalCurrentPage')||'home',allSchedules=[],currentPageNumber=1,pageSize=10,masterCache={programs:[],staff:[],places:[]},masterType='programs';
+const SESSION_IDLE_LIMIT = 30 * 60 * 1000;
+const SESSION_MAX_AGE = 8 * 60 * 60 * 1000;
+const SESSION_CHECK_INTERVAL = 60 * 1000;
+
+let sessionGuardTimer = null;
+let sessionStartedAt = 0;
+let sessionEnding = false;
+
+function sessionKey(userId, name) {
+  return `jadwal_${name}_${userId}`;
+}
+
+function stopSessionGuard() {
+  if (sessionGuardTimer) {
+    clearInterval(sessionGuardTimer);
+    sessionGuardTimer = null;
+  }
+  sessionStartedAt = 0;
+  sessionEnding = false;
+}
+
+function recordSessionActivity() {
+  if (!currentUser?.id || sessionEnding) return;
+  localStorage.setItem(
+    sessionKey(currentUser.id, 'last_activity'),
+    String(Date.now())
+  );
+}
+
+async function endSession(reason) {
+  if (sessionEnding) return;
+  sessionEnding = true;
+  stopSessionGuard();
+
+  await client.auth.signOut({ scope: 'local' });
+  await showSession(null);
+
+  $('message').textContent = reason;
+}
+
+function startSessionGuard(userId, resetSession = false) {
+  if (sessionGuardTimer) clearInterval(sessionGuardTimer);
+
+  const startKey = sessionKey(userId, 'started_at');
+  const activityKey = sessionKey(userId, 'last_activity');
+
+  if (resetSession || !localStorage.getItem(startKey)) {
+    localStorage.setItem(startKey, String(Date.now()));
+  }
+
+  sessionStartedAt = Number(localStorage.getItem(startKey));
+  if (!localStorage.getItem(activityKey) || resetSession) {
+    localStorage.setItem(activityKey, String(Date.now()));
+  }
+
+  recordSessionActivity();
+
+  sessionGuardTimer = setInterval(async () => {
+    if (!currentUser || currentUser.id !== userId || sessionEnding) return;
+
+    const now = Date.now();
+    const lastActivity = Number(localStorage.getItem(activityKey) || 0);
+
+    if (now - sessionStartedAt >= SESSION_MAX_AGE) {
+      await endSession('Sesi berakhir setelah 8 jam. Silakan login kembali.');
+      return;
+    }
+
+    if (now - lastActivity >= SESSION_IDLE_LIMIT) {
+      await endSession('Sesi berakhir karena tidak aktif selama 30 menit. Silakan login kembali.');
+      return;
+    }
+
+    const { data, error } = await client
+      .from('profiles')
+      .select('is_active, password_reset_at')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) return;
+
+    if (!data || !data.is_active) {
+      await endSession('Akun tidak aktif atau sesi tidak berlaku. Silakan login kembali.');
+      return;
+    }
+
+    const markerKey = sessionKey(userId, 'password_reset_at');
+    const savedMarker = localStorage.getItem(markerKey);
+    const currentMarker = data.password_reset_at || '';
+
+    if (savedMarker !== null && savedMarker !== currentMarker) {
+      await endSession('Password akun telah direset. Silakan login kembali menggunakan password terbaru.');
+    } else if (savedMarker === null) {
+      localStorage.setItem(markerKey, currentMarker);
+    }
+  }, SESSION_CHECK_INTERVAL);
+}
+
+['pointerdown', 'keydown', 'touchstart', 'scroll'].forEach(eventName => {
+  document.addEventListener(eventName, recordSessionActivity, { passive: true });
+});
 const pageInfo={home:['Beranda','Ringkasan dan daftar jadwal kegiatan'],input:['Input Jadwal','Tambahkan jadwal kegiatan baru'],import: ['Import Excel', 'Impor jadwal kegiatan dari file Excel'],program:['Program','Daftar program kegiatan'],staff:['Staff / Petugas','Daftar petugas terdaftar'],places:['Tempat','Daftar tempat kegiatan'],calendar:['Kalender','Kalender kerja dan kebijakan tanggal'],accounts:['Pengelolaan Akun', 'Kelola akun operator dan petugas'],settings:['Pengaturan','Pengaturan akun dan akses pengguna']};
 function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
 function msg(t,error=false){$('dashboardMessage').textContent=t||'';$('dashboardMessage').style.color=error?'#b42318':'#087f5b'}
@@ -54,8 +155,9 @@ function ensureAccountNav(isAdmin) {
 
 function fallbackLogo(){const svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M50 3 91 26v48L50 97 9 74V26Z" fill="#fff" stroke="#075c43" stroke-width="5"/><path d="M40 19h20v21h21v20H60v21H40V60H19V40h21Z" fill="#087f5b"/><circle cx="58" cy="49" r="8" fill="none" stroke="#fff" stroke-width="2"/><circle cx="70" cy="49" r="8" fill="none" stroke="#fff" stroke-width="2"/></svg>';$('headerLogo').src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)}
 $('headerLogo').addEventListener('error',fallbackLogo);$('togglePassword').addEventListener('click',()=>{const p=$('password');p.type=p.type==='password'?'text':'password';$('togglePassword').textContent=p.type==='password'?'Lihat':'Sembunyikan'});
-async function showSession(session){
+async function showSession(session, freshLogin = false){
   if(!session){
+    stopSessionGuard();
     currentProfile=null;
     currentUser=null;
     $('loginCard').classList.remove('hidden');
@@ -73,9 +175,16 @@ async function showSession(session){
   }
 
   currentUser=session.user;
-const {data,error}=await client.from('profiles').select('full_name,role,staff_id,is_active,password_reset_at').eq('id',session.user.id).maybeSingle();if(error||!data||!data.is_active){await client.auth.signOut();$('message').textContent='Profil belum tersedia atau akun belum aktif. Hubungi administrator.';return}currentProfile=data;$('loginCard').classList.add('hidden');$('dashboardCard').classList.remove('hidden');$('sideProfile').innerHTML=esc(data.full_name||'Pengguna')+'<small id="sideRole">'+esc(data.role||'petugas')+'</small>';$('roleChip').textContent=(data.role||'petugas').toUpperCase();ensureAccountNav(data.role === 'admin');const savedPage=sessionStorage.getItem('jadwalCurrentPage')||'home';
+const {data,error}=await client.from('profiles').select('full_name,role,staff_id,is_active,password_reset_at').eq('id',session.user.id).maybeSingle();if(error||!data||!data.is_active){await client.auth.signOut();$('message').textContent='Profil belum tersedia atau akun belum aktif. Hubungi administrator.';const markerKey = sessionKey(session.user.id, 'password_reset_at');
+
+if (freshLogin || localStorage.getItem(markerKey) === null) {
+  localStorage.setItem(markerKey, data.password_reset_at || '');
+}
+
+startSessionGuard(session.user.id, freshLogin);
+return}currentProfile=data;$('loginCard').classList.add('hidden');$('dashboardCard').classList.remove('hidden');$('sideProfile').innerHTML=esc(data.full_name||'Pengguna')+'<small id="sideRole">'+esc(data.role||'petugas')+'</small>';$('roleChip').textContent=(data.role||'petugas').toUpperCase();ensureAccountNav(data.role === 'admin');const savedPage=sessionStorage.getItem('jadwalCurrentPage')||'home';
 setPage(pageInfo[savedPage]?savedPage:'home');}
-$('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginButton').disabled=true;$('loginButton').textContent='Memeriksa akun...';$('message').textContent='';try{const {data,error}=await client.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});if(error)throw error;await showSession(data.session)}catch(e){$('message').textContent='Login gagal. Periksa email, password, dan koneksi.'}finally{$('loginButton').disabled=false;$('loginButton').textContent='Masuk'}});
+$('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginButton').disabled=true;$('loginButton').textContent='Memeriksa akun...';$('message').textContent='';try{const {data,error}=await client.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});if(error)throw error;await showSession(data.session, true)}catch(e){$('message').textContent='Login gagal. Periksa email, password, dan koneksi.'}finally{$('loginButton').disabled=false;$('loginButton').textContent='Masuk'}});
 $('logoutButton').addEventListener('click',async()=>{const {error}=await client.auth.signOut();if(error){msg('Gagal keluar. Silakan coba lagi.',true);return}msg('');$('message').textContent='';await showSession(null)});$('mobileMenu').addEventListener('click',()=>$('sidebar').classList.toggle('open'));document.querySelectorAll('.nav-btn[data-page]').forEach(b=>b.addEventListener('click',()=>setPage(b.dataset.page)));
 async function fetchMaster(table,columns,order){const {data,error}=await client.from(table).select(columns).eq('is_active',true).order(order,{ascending:true}).limit(1000);if(error)throw error;return data||[]}
 async function loadMasters(){const [programs,staff,places]=await Promise.all([fetchMaster('programs','id,program_code,program_name,is_active','program_name'),fetchMaster('staff','id,employee_code,full_name,is_active','full_name'),fetchMaster('places','id,place_name,is_active','place_name')]);masterCache={programs,staff,places};return masterCache}
