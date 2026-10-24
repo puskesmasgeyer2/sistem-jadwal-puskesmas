@@ -166,12 +166,13 @@ async function showSession(session, freshLogin = false) {
   }
 
   if (
-    currentUser?.id === session.user.id &&
-    !$('dashboardCard').classList.contains('hidden')
-  ) {
-    currentUser = session.user;
-    return;
-  }
+  !freshLogin &&
+  currentUser?.id === session.user.id &&
+  !$('dashboardCard').classList.contains('hidden')
+) {
+  currentUser = session.user;
+  return;
+}
 
   currentUser = session.user;
 
