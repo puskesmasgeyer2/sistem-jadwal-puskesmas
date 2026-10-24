@@ -4,7 +4,7 @@ const client=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY)
 const $=id=>document.getElementById(id);let currentProfile=null,currentUser=null,currentPage=sessionStorage.getItem('jadwalCurrentPage')||'home',allSchedules=[],currentPageNumber=1,pageSize=10,masterCache={programs:[],staff:[],places:[]},masterType='programs';
 const SESSION_IDLE_LIMIT = 30 * 60 * 1000;
 const SESSION_MAX_AGE = 8 * 60 * 60 * 1000;
-const SESSION_CHECK_INTERVAL = 60 * 1000;
+const SESSION_CHECK_INTERVAL = 5 * 1000;
 
 let sessionGuardTimer = null;
 let sessionStartedAt = 0;
