@@ -1363,5 +1363,220 @@ function parseImportDate(value) {
   });
 }
 
+async function renderRekap() {
+  const c = $('dashboardContent');
+
+  c.innerHTML = '<div class="loading">Memuat rekapitulasi kegiatan...</div>';
+
+  try {
+    await loadMasters();
+    allSchedules = await getScheduleData();
+
+    const now = new Date();
+
+    c.innerHTML = `
+      <div class="welcome-row">
+        <div>
+          <h3>Rekapitulasi Jadwal Kegiatan</h3>
+          <p>Rekap jumlah kegiatan berdasarkan masing-masing petugas.</p>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stat">
+          <div>
+            <div class="stat-top">Total Kegiatan</div>
+            <strong id="rekapTotal">0</strong>
+          </div>
+          <span class="stat-icon">▤</span>
+        </div>
+
+        <div class="stat">
+          <div>
+            <div class="stat-top">Petugas Terjadwal</div>
+            <strong id="rekapPetugas">0</strong>
+          </div>
+          <span class="stat-icon">♙</span>
+        </div>
+
+        <div class="stat">
+          <div>
+            <div class="stat-top">Program Terlaksana</div>
+            <strong id="rekapProgram">0</strong>
+          </div>
+          <span class="stat-icon">▦</span>
+        </div>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Filter Rekapitulasi</h3>
+        </div>
+
+        <div class="filters">
+          <div>
+            <label for="rekapMonth">Bulan</label>
+            <select id="rekapMonth">
+              <option value="all">Semua Bulan</option>
+              ${[
+                'Januari','Februari','Maret','April',
+                'Mei','Juni','Juli','Agustus',
+                'September','Oktober','November','Desember'
+              ].map((m,i) =>
+                `<option value="${i+1}">${m}</option>`
+              ).join('')}
+            </select>
+          </div>
+
+          <div>
+            <label for="rekapYear">Tahun</label>
+            <select id="rekapYear">
+              <option value="all">Semua Tahun</option>
+              ${Array.from(
+                {length: 10},
+                (_,i) => 2026+i
+              ).map(y =>
+                `<option value="${y}" ${y===now.getFullYear()?'selected':''}>${y}</option>`
+              ).join('')}
+            </select>
+          </div>
+
+          <div class="filter-search">
+            <label for="rekapSearch">Cari Petugas</label>
+            <input
+              id="rekapSearch"
+              type="search"
+              placeholder="Masukkan nama petugas..."
+            >
+          </div>
+
+          <button type="button" id="rekapApply">
+            Terapkan
+          </button>
+        </div>
+
+        <div id="rekapTable"></div>
+
+        <div class="page-foot">
+          Data hanya menghitung jadwal dengan status valid.
+        </div>
+      </section>
+    `;
+
+    function drawRekap() {
+      const month = $('rekapMonth').value;
+      const year = $('rekapYear').value;
+      const query = $('rekapSearch').value
+        .trim().toLowerCase();
+
+      const filtered = allSchedules.filter(x =>
+        (month === 'all' ||
+          Number(x.activity_date.slice(5,7)) === Number(month)) &&
+        (year === 'all' ||
+          x.activity_date.startsWith(year))
+      );
+
+      const groups = {};
+
+      filtered.forEach(x => {
+        if (!groups[x.staff_id]) {
+          groups[x.staff_id] = {
+            id: x.staff_id,
+            name: x.staff_name,
+            total: 0,
+            programs: new Set(),
+            places: new Set()
+          };
+        }
+
+        groups[x.staff_id].total++;
+        groups[x.staff_id].programs.add(x.program_name);
+        groups[x.staff_id].places.add(x.place_name);
+      });
+
+      const rows = Object.values(groups)
+        .filter(x =>
+          x.name.toLowerCase().includes(query)
+        )
+        .sort((a,b) =>
+          b.total - a.total ||
+          a.name.localeCompare(b.name)
+        );
+
+      const totalProgram = new Set(
+        filtered.map(x => x.program_id)
+      ).size;
+
+      $('rekapTotal').textContent = filtered.length;
+      $('rekapPetugas').textContent =
+        Object.keys(groups).length;
+      $('rekapProgram').textContent = totalProgram;
+
+      $('rekapTable').innerHTML = rows.length
+        ? `
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>No</th>
+                  <th>Nama Petugas</th>
+                  <th>Jumlah Kegiatan</th>
+                  <th>Jumlah Program</th>
+                  <th>Jumlah Tempat</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map((x,i) => `
+                  <tr>
+                    <td>${i+1}</td>
+                    <td><strong>${esc(x.name)}</strong></td>
+                    <td>
+                      <span class="badge">${x.total} Kegiatan</span>
+                    </td>
+                    <td>${x.programs.size}</td>
+                    <td>${x.places.size}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <th colspan="2">Total Kegiatan</th>
+                  <th>${filtered.length}</th>
+                  <th colspan="2"> </th>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        `
+        : '<div class="empty">Belum ada data rekapitulasi sesuai filter.</div>';
+    }
+
+    $('rekapApply').addEventListener('click', drawRekap);
+
+    ['rekapMonth','rekapYear'].forEach(id => {
+      $(id).addEventListener('change', drawRekap);
+    });
+
+    $('rekapSearch').addEventListener('input', drawRekap);
+
+    drawRekap();
+
+  } catch (e) {
+    c.innerHTML = `
+      <section class="panel">
+        <h3>Rekapitulasi gagal dimuat</h3>
+        <div class="notice warn">
+          ${esc(e.message || 'Periksa koneksi database.')}
+        </div>
+        <button type="button" id="retryRekap">
+          Coba Lagi
+        </button>
+      </section>
+    `;
+
+    $('retryRekap').addEventListener('click', renderRekap);
+  }
+}
+
 function renderPage(page){if(page==='home')return renderHome();if (page === 'rekap') return renderRekap();if(page==='input')return renderInput();if (page === 'import') return renderImport();if(page==='program')return renderMaster('programs');if(page==='staff')return renderMaster('staff');if(page==='places')return renderMaster('places');if(page==='calendar')return renderCalendar();if (page === 'accounts') return renderAccounts();if(page==='settings')return renderSettings()}
 client.auth.onAuthStateChange((_event,session)=>{showSession(session)});client.auth.getSession().then(({data,error})=>{if(error){$('message').textContent='Sesi tidak dapat diperiksa. Muat ulang halaman.';return}showSession(data.session)});
