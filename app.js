@@ -1363,210 +1363,259 @@ function parseImportDate(value) {
   });
 }
 
+
 async function renderRekap() {
   const c = $('dashboardContent');
 
-  c.innerHTML = '<div class="loading">Memuat rekapitulasi kegiatan...</div>';
+  c.innerHTML = '<div class="loading">Memuat rekap kegiatan...</div>';
+
+  let selectedStaffId = null;
 
   try {
-    await loadMasters();
     allSchedules = await getScheduleData();
 
     const now = new Date();
+    const monthNames = [
+      'Januari','Februari','Maret','April',
+      'Mei','Juni','Juli','Agustus',
+      'September','Oktober','November','Desember'
+    ];
+
+    const years = [];
+    for (let y = 2026; y <= Math.max(2032, now.getFullYear() + 2); y++) {
+      years.push(y);
+    }
 
     c.innerHTML = `
-      <div class="welcome-row">
-        <div>
-          <h3>Rekapitulasi Jadwal Kegiatan</h3>
-          <p>Rekap jumlah kegiatan berdasarkan masing-masing petugas.</p>
-        </div>
-      </div>
-
-      <div class="stats">
-        <div class="stat">
-          <div>
-            <div class="stat-top">Total Kegiatan</div>
-            <strong id="rekapTotal">0</strong>
-          </div>
-          <span class="stat-icon">▤</span>
-        </div>
-
-        <div class="stat">
-          <div>
-            <div class="stat-top">Petugas Terjadwal</div>
-            <strong id="rekapPetugas">0</strong>
-          </div>
-          <span class="stat-icon">♙</span>
-        </div>
-
-        <div class="stat">
-          <div>
-            <div class="stat-top">Program Terlaksana</div>
-            <strong id="rekapProgram">0</strong>
-          </div>
-          <span class="stat-icon">▦</span>
-        </div>
-      </div>
-
       <section class="panel">
-        <div class="panel-head">
-          <h3>Filter Rekapitulasi</h3>
-        </div>
+        <h3>Rekap Kegiatan Petugas</h3>
 
         <div class="filters">
           <div>
             <label for="rekapMonth">Bulan</label>
             <select id="rekapMonth">
-              <option value="all">Semua Bulan</option>
-              ${[
-                'Januari','Februari','Maret','April',
-                'Mei','Juni','Juli','Agustus',
-                'September','Oktober','November','Desember'
-              ].map((m,i) =>
-                `<option value="${i+1}">${m}</option>`
-              ).join('')}
+              ${monthNames.map((m, i) => `
+                <option value="${i + 1}"
+                  ${i + 1 === now.getMonth() + 1 ? 'selected' : ''}>
+                  ${m}
+                </option>
+              `).join('')}
             </select>
           </div>
 
           <div>
             <label for="rekapYear">Tahun</label>
             <select id="rekapYear">
-              <option value="all">Semua Tahun</option>
-              ${Array.from(
-                {length: 10},
-                (_,i) => 2026+i
-              ).map(y =>
-                `<option value="${y}" ${y===now.getFullYear()?'selected':''}>${y}</option>`
-              ).join('')}
+              ${years.map(y => `
+                <option value="${y}"
+                  ${y === now.getFullYear() ? 'selected' : ''}>
+                  ${y}
+                </option>
+              `).join('')}
             </select>
           </div>
-
-          <div class="filter-search">
-            <label for="rekapSearch">Cari Petugas</label>
-            <input
-              id="rekapSearch"
-              type="search"
-              placeholder="Masukkan nama petugas..."
-            >
-          </div>
-
-          <button type="button" id="rekapApply">
-            Terapkan
-          </button>
         </div>
 
-        <div id="rekapTable"></div>
+        <button type="button" id="applyRekapFilter"
+          style="width:100%;margin-top:15px">
+          Terapkan Filter
+        </button>
 
-        <div class="page-foot">
-          Data hanya menghitung jadwal dengan status valid.
-        </div>
+        <hr style="margin:24px 0;border:0;border-top:1px solid var(--border,#e5e7eb)">
+
+        <div id="rekapList"></div>
+        <div id="rekapDetail"></div>
       </section>
     `;
 
-    function drawRekap() {
-      const month = $('rekapMonth').value;
+    function getFilteredSchedules() {
+      const month = Number($('rekapMonth').value);
       const year = $('rekapYear').value;
-      const query = $('rekapSearch').value
-        .trim().toLowerCase();
 
-      const filtered = allSchedules.filter(x =>
-        (month === 'all' ||
-          Number(x.activity_date.slice(5,7)) === Number(month)) &&
-        (year === 'all' ||
-          x.activity_date.startsWith(year))
+      return allSchedules.filter(x =>
+        Number(x.activity_date.slice(5, 7)) === month &&
+        x.activity_date.startsWith(year)
       );
+    }
 
+    function drawRekapList() {
+      selectedStaffId = null;
+
+      const schedules = getFilteredSchedules();
       const groups = {};
 
-      filtered.forEach(x => {
+      schedules.forEach(x => {
         if (!groups[x.staff_id]) {
           groups[x.staff_id] = {
             id: x.staff_id,
             name: x.staff_name,
-            total: 0,
-            programs: new Set(),
-            places: new Set()
+            schedules: []
           };
         }
 
-        groups[x.staff_id].total++;
-        groups[x.staff_id].programs.add(x.program_name);
-        groups[x.staff_id].places.add(x.place_name);
+        groups[x.staff_id].schedules.push(x);
       });
 
-      const rows = Object.values(groups)
-        .filter(x =>
-          x.name.toLowerCase().includes(query)
-        )
-        .sort((a,b) =>
-          b.total - a.total ||
-          a.name.localeCompare(b.name)
-        );
+      const rows = Object.values(groups).sort((a, b) =>
+        b.schedules.length - a.schedules.length ||
+        a.name.localeCompare(b.name)
+      );
 
-      const totalProgram = new Set(
-        filtered.map(x => x.program_id)
-      ).size;
+      $('rekapDetail').innerHTML = '';
 
-      $('rekapTotal').textContent = filtered.length;
-      $('rekapPetugas').textContent =
-        Object.keys(groups).length;
-      $('rekapProgram').textContent = totalProgram;
+      $('rekapList').innerHTML = `
+        <h3>Rekapitulasi Petugas</h3>
 
-      $('rekapTable').innerHTML = rows.length
-        ? `
-          <div class="table-wrap">
-            <table class="data-table">
-              <thead>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>No</th>
+                <th>Nama Petugas</th>
+                <th>Jumlah</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              ${rows.map((x, i) => `
                 <tr>
-                  <th>No</th>
-                  <th>Nama Petugas</th>
-                  <th>Jumlah Kegiatan</th>
-                  <th>Jumlah Program</th>
-                  <th>Jumlah Tempat</th>
+                  <td>${i + 1}</td>
+                  <td>${esc(x.name)}</td>
+                  <td style="text-align:center">
+                    <strong>${x.schedules.length}</strong>
+                  </td>
+                  <td style="text-align:center">
+                    <button type="button"
+                      class="small-btn"
+                      data-rekap-detail="${esc(x.id)}">
+                      Detail
+                    </button>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                ${rows.map((x,i) => `
-                  <tr>
-                    <td>${i+1}</td>
-                    <td><strong>${esc(x.name)}</strong></td>
-                    <td>
-                      <span class="badge">${x.total} Kegiatan</span>
-                    </td>
-                    <td>${x.programs.size}</td>
-                    <td>${x.places.size}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-              <tfoot>
+              `).join('') || `
                 <tr>
-                  <th colspan="2">Total Kegiatan</th>
-                  <th>${filtered.length}</th>
-                  <th colspan="2"> </th>
+                  <td colspan="4" class="empty-cell">
+                    Belum ada kegiatan pada periode ini.
+                  </td>
                 </tr>
-              </tfoot>
-            </table>
-          </div>
-        `
-        : '<div class="empty">Belum ada data rekapitulasi sesuai filter.</div>';
+              `}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      $('rekapList').querySelectorAll('[data-rekap-detail]')
+        .forEach(btn => {
+          btn.addEventListener('click', () => {
+            drawRekapDetail(btn.dataset.rekapDetail);
+          });
+        });
     }
 
-    $('rekapApply').addEventListener('click', drawRekap);
+    function drawRekapDetail(staffId) {
+      selectedStaffId = staffId;
 
-    ['rekapMonth','rekapYear'].forEach(id => {
-      $(id).addEventListener('change', drawRekap);
-    });
+      const schedules = getFilteredSchedules()
+        .filter(x => x.staff_id === staffId)
+        .sort((a, b) =>
+          a.activity_date.localeCompare(b.activity_date)
+        );
 
-    $('rekapSearch').addEventListener('input', drawRekap);
+      if (!schedules.length) return;
 
-    drawRekap();
+      const staffName = schedules[0].staff_name;
+      const differentDates = new Set(
+        schedules.map(x => x.activity_date)
+      ).size;
+
+      const month = Number($('rekapMonth').value);
+      const year = $('rekapYear').value;
+
+      $('rekapList').innerHTML = '';
+
+      $('rekapDetail').innerHTML = `
+        <div class="panel-head">
+          <h3>Detail Kegiatan Petugas</h3>
+          <span class="badge">
+            ${monthNames[month - 1]} ${year}
+          </span>
+        </div>
+
+        <p class="muted">Nama Petugas</p>
+        <h3>${esc(staffName)}</h3>
+
+        <div class="stats">
+          <div class="stat">
+            <div>
+              <strong style="color:#087f5b">
+                ${schedules.length}
+              </strong>
+              <div class="stat-top">Total kegiatan</div>
+            </div>
+          </div>
+
+          <div class="stat">
+            <div>
+              <strong>${differentDates}</strong>
+              <div class="stat-top">Tanggal berbeda</div>
+            </div>
+          </div>
+        </div>
+
+        <h3>Daftar Kegiatan</h3>
+
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Tanggal</th>
+                <th>Program</th>
+                <th>Tempat</th>
+                <th>Catatan</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              ${schedules.map(x => `
+                <tr>
+                  <td>${new Date(
+                    x.activity_date + 'T12:00:00'
+                  ).toLocaleDateString('id-ID', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric'
+                  })}</td>
+                  <td>${esc(x.program_name)}</td>
+                  <td>${esc(x.place_name)}</td>
+                  <td>${esc(x.notes || '-')}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="secondary"
+            id="backRekap">
+            ← Kembali ke Rekap
+          </button>
+        </div>
+      `;
+
+      $('backRekap').addEventListener('click', drawRekapList);
+    }
+
+    $('applyRekapFilter').addEventListener('click', drawRekapList);
+
+    drawRekapList();
 
   } catch (e) {
     c.innerHTML = `
       <section class="panel">
-        <h3>Rekapitulasi gagal dimuat</h3>
+        <h3>Rekap gagal dimuat</h3>
         <div class="notice warn">
-          ${esc(e.message || 'Periksa koneksi database.')}
+          ${esc(e.message || 'Periksa koneksi Supabase.')}
         </div>
         <button type="button" id="retryRekap">
           Coba Lagi
