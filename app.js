@@ -181,7 +181,78 @@ $('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginBu
 $('logoutButton').addEventListener('click',async()=>{stopSessionGuard();const {error}=await client.auth.signOut();if(error){msg('Gagal keluar. Silakan coba lagi.',true);return}msg('');$('message').textContent='';await showSession(null)});$('mobileMenu').addEventListener('click',()=>$('sidebar').classList.toggle('open'));document.querySelectorAll('.nav-btn[data-page]').forEach(b=>b.addEventListener('click',()=>setPage(b.dataset.page)));
 async function fetchMaster(table,columns,order){const {data,error}=await client.from(table).select(columns).eq('is_active',true).order(order,{ascending:true}).limit(1000);if(error)throw error;return data||[]}
 async function loadMasters(){const [programs,staff,places]=await Promise.all([fetchMaster('programs','id,program_code,program_name,is_active','program_name'),fetchMaster('staff','id,employee_code,full_name,is_active','full_name'),fetchMaster('places','id,place_name,is_active','place_name')]);masterCache={programs,staff,places};return masterCache}
-function monthYearFilters(){const now=new Date();const years=[];for(let y=2026;y<=Math.max(2032,now.getFullYear()+2);y++)years.push(y);return `<div class="filters"><div><label for="filterMonth">Bulan</label><select id="filterMonth"><option value="all">Semua bulan</option>${['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'].map((m,i)=>`<option value="${i+1}" ${i+1===now.getMonth()+1?'selected':''}>${m}</option>`).join('')}</select></div><div><label for="filterYear">Tahun</label><select id="filterYear">${years.map(y=>`<option value="${y}" ${y===now.getFullYear()?'selected':''}>${y}</option>`).join('')}<option value="all">Semua tahun</option></select></div><div class="filter-search"><label for="filterSearch">Cari jadwal</label><input id="filterSearch" placeholder="Program, petugas, tempat..."></div><button id="applyFilters" type="button">Terapkan</button></div>`}
+
+function monthYearFilters() {
+  const now = new Date();
+  const years = [];
+
+  for (
+    let y = 2026;
+    y <= Math.max(2032, now.getFullYear() + 2);
+    y++
+  ) {
+    years.push(y);
+  }
+
+  return `
+    <div class="filters">
+
+      <div>
+        <label for="filterMonth">Bulan</label>
+        <select id="filterMonth">
+          <option value="all">Semua bulan</option>
+          ${[
+            'Januari','Februari','Maret','April',
+            'Mei','Juni','Juli','Agustus',
+            'September','Oktober','November','Desember'
+          ].map((m, i) => `
+            <option value="${i + 1}"
+              ${i + 1 === now.getMonth() + 1 ? 'selected' : ''}>
+              ${m}
+            </option>
+          `).join('')}
+        </select>
+      </div>
+
+      <div>
+        <label for="filterYear">Tahun</label>
+        <select id="filterYear">
+          ${years.map(y => `
+            <option value="${y}"
+              ${y === now.getFullYear() ? 'selected' : ''}>
+              ${y}
+            </option>
+          `).join('')}
+          <option value="all">Semua tahun</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="filterDateStart">Tanggal Mulai</label>
+        <input type="date" id="filterDateStart">
+      </div>
+
+      <div>
+        <label for="filterDateEnd">Tanggal Akhir</label>
+        <input type="date" id="filterDateEnd">
+      </div>
+
+      <div class="filter-search">
+        <label for="filterSearch">Cari jadwal</label>
+        <input
+          type="search"
+          id="filterSearch"
+          placeholder="Program, petugas, tempat..."
+        >
+      </div>
+
+      <button id="applyFilters" type="button">
+        Terapkan
+      </button>
+
+    </div>
+  `;
+}
 
 async function getScheduleData() {
   // Ambil jadwal yang masih berstatus valid
@@ -348,27 +419,75 @@ function openScheduleEditor(item) {
   });
 }
 
+
 function drawHomeTable() {
   const month = $('filterMonth')?.value || 'all';
-  const year = $('filterYear')?.value || String(new Date().getFullYear());
-  const q = ($('filterSearch')?.value || '').trim().toLowerCase();
+  const year = $('filterYear')?.value || 'all';
 
-  const rows = allSchedules.filter(x =>
-    (month === 'all' || Number(x.activity_date.slice(5, 7)) === Number(month)) &&
-    (year === 'all' || x.activity_date.startsWith(year)) &&
-    [x.program_name, x.staff_name, x.place_name, x.notes]
-      .some(v => String(v || '').toLowerCase().includes(q))
-  );
+  const dateStart = $('filterDateStart')?.value || '';
+  const dateEnd = $('filterDateEnd')?.value || '';
+
+  const q = ($('filterSearch')?.value || '')
+    .trim()
+    .toLowerCase();
+
+  // Validasi rentang tanggal.
+  if (dateStart && dateEnd && dateStart > dateEnd) {
+    $('homeTable').innerHTML = `
+      <div class="notice warn">
+        Tanggal mulai tidak boleh melebihi tanggal akhir.
+      </div>
+    `;
+    $('homePagination').innerHTML = '';
+    return;
+  }
+
+  const useDateRange = Boolean(dateStart || dateEnd);
+
+  const rows = allSchedules.filter(x => {
+    const date = x.activity_date;
+
+    // Jika rentang tanggal diisi, gunakan rentang tersebut.
+    // Jika kosong, gunakan filter bulan dan tahun.
+    const matchDate = useDateRange
+      ? (
+          (!dateStart || date >= dateStart) &&
+          (!dateEnd || date <= dateEnd)
+        )
+      : (
+          (month === 'all' ||
+            Number(date.slice(5, 7)) === Number(month)) &&
+          (year === 'all' ||
+            date.startsWith(year))
+        );
+
+    const matchSearch = [
+      x.program_name,
+      x.staff_name,
+      x.place_name,
+      x.notes
+    ].some(v =>
+      String(v || '').toLowerCase().includes(q)
+    );
+
+    return matchDate && matchSearch;
+  });
 
   const isAdmin = currentProfile?.role === 'admin';
-  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+
+  const pages = Math.max(
+    1,
+    Math.ceil(rows.length / pageSize)
+  );
+
   currentPageNumber = Math.min(currentPageNumber, pages);
 
   const start = (currentPageNumber - 1) * pageSize;
   const pageRows = rows.slice(start, start + pageSize);
 
   $('homeTable').innerHTML = pageRows.length
-    ? `<div class="table-wrap">
+    ? `
+      <div class="table-wrap">
         <table class="data-table">
           <thead>
             <tr>
@@ -381,6 +500,7 @@ function drawHomeTable() {
               ${isAdmin ? '<th>Aksi</th>' : ''}
             </tr>
           </thead>
+
           <tbody>
             ${pageRows.map(x => `
               <tr>
@@ -390,29 +510,56 @@ function drawHomeTable() {
                 <td>${esc(x.place_name)}</td>
                 <td>${esc(x.notes || '-')}</td>
                 <td><span class="badge">Valid</span></td>
+
                 ${isAdmin ? `
                   <td>
                     <div class="row-actions">
-                      <button type="button" class="small-btn"
-                        data-edit-schedule="${esc(x.id)}">Edit</button>
-                      <button type="button" class="small-btn danger-btn"
-                        data-delete-schedule="${esc(x.id)}">Hapus</button>
+                      <button type="button"
+                        class="small-btn"
+                        data-edit-schedule="${esc(x.id)}">
+                        Edit
+                      </button>
+
+                      <button type="button"
+                        class="small-btn danger-btn"
+                        data-delete-schedule="${esc(x.id)}">
+                        Hapus
+                      </button>
                     </div>
-                  </td>` : ''}
+                  </td>
+                ` : ''}
               </tr>
             `).join('')}
           </tbody>
         </table>
-      </div>`
+      </div>
+    `
     : '<div class="empty">Tidak ada jadwal sesuai filter.</div>';
 
   $('homePagination').innerHTML = `
-    <span>Menampilkan ${rows.length ? start + 1 : 0}–${Math.min(start + pageSize, rows.length)} dari ${rows.length} jadwal</span>
+    <span>
+      Menampilkan ${rows.length ? start + 1 : 0}–${Math.min(
+        start + pageSize,
+        rows.length
+      )} dari ${rows.length} jadwal
+    </span>
+
     <div class="pagination-actions">
-      <button id="prevPage" ${currentPageNumber <= 1 ? 'disabled' : ''}>Sebelumnya</button>
-      <span style="padding:8px">Halaman ${currentPageNumber}/${pages}</span>
-      <button id="nextPage" ${currentPageNumber >= pages ? 'disabled' : ''}>Berikutnya</button>
-    </div>`;
+      <button id="prevPage"
+        ${currentPageNumber <= 1 ? 'disabled' : ''}>
+        Sebelumnya
+      </button>
+
+      <span style="padding:8px">
+        Halaman ${currentPageNumber}/${pages}
+      </span>
+
+      <button id="nextPage"
+        ${currentPageNumber >= pages ? 'disabled' : ''}>
+        Berikutnya
+      </button>
+    </div>
+  `;
 
   $('prevPage').addEventListener('click', () => {
     currentPageNumber--;
@@ -424,40 +571,46 @@ function drawHomeTable() {
     drawHomeTable();
   });
 
-  document.querySelectorAll('[data-edit-schedule]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const item = allSchedules.find(x => x.id === btn.dataset.editSchedule);
-      if (item) openScheduleEditor(item);
+  document.querySelectorAll('[data-edit-schedule]')
+    .forEach(btn => {
+      btn.addEventListener('click', () => {
+        const item = allSchedules.find(
+          x => x.id === btn.dataset.editSchedule
+        );
+
+        if (item) openScheduleEditor(item);
+      });
     });
-  });
 
-  document.querySelectorAll('[data-delete-schedule]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const id = btn.dataset.deleteSchedule;
-      const item = allSchedules.find(x => x.id === id);
-      if (!item) return;
+  document.querySelectorAll('[data-delete-schedule]')
+    .forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.deleteSchedule;
+        const item = allSchedules.find(x => x.id === id);
 
-      if (!confirm(
-        `Hapus jadwal ${item.activity_date} untuk ${item.staff_name}?\nTindakan ini tidak dapat dibatalkan.`
-      )) return;
+        if (!item) return;
 
-      btn.disabled = true;
+        if (!confirm(
+          `Hapus jadwal ${item.activity_date} untuk ${item.staff_name}?\nTindakan ini tidak dapat dibatalkan.`
+        )) return;
 
-      const { error } = await client
-        .from('schedules')
-        .delete()
-        .eq('id', id);
+        btn.disabled = true;
 
-      if (error) {
-        alert('Jadwal gagal dihapus: ' + error.message);
-        btn.disabled = false;
-        return;
-      }
+        const { error } = await client
+          .from('schedules')
+          .delete()
+          .eq('id', id);
 
-      await renderHome();
-      msg('Jadwal berhasil dihapus.');
+        if (error) {
+          alert('Jadwal gagal dihapus: ' + error.message);
+          btn.disabled = false;
+          return;
+        }
+
+        await renderHome();
+        msg('Jadwal berhasil dihapus.');
+      });
     });
-  });
 }
 
 async function renderInput(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat pilihan formulir...</div>';try{await loadMasters();const isPetugas=currentProfile?.role==='petugas';if(isPetugas&&!currentProfile.staff_id){c.innerHTML='<div class="panel"><h3>Akun belum terhubung ke petugas</h3><p class="muted">Hubungi administrator untuk mengisi staff_id pada profil akun.</p></div>';return}const opt=(arr,label,value,extra=()=> '')=>arr.map(x=>`<option value="${esc(x[value])}">${esc(label(x))}${extra(x)}</option>`).join('');c.innerHTML=`<div class="welcome-row"><div><h3>Input Jadwal Kegiatan</h3><p>Lengkapi informasi kegiatan. Sistem akan memeriksa kebijakan kalender dan bentrok petugas.</p></div></div><section class="panel"><form id="scheduleForm"><div class="form-grid"><div><label for="activityDate">Tanggal kegiatan *</label><input id="activityDate" type="date" required></div><div><label for="programId">Program kegiatan *</label><select id="programId" required><option value="">Pilih program</option>${opt(masterCache.programs,x=>x.program_name,'id',x=>x.program_code?' — '+x.program_code:'')}</select></div><div><label for="staffId">Nama petugas *</label><select id="staffId" required ${isPetugas?'disabled':''}><option value="">Pilih petugas</option>${opt(masterCache.staff.filter(x=>!isPetugas||x.id===currentProfile.staff_id),x=>x.full_name,'id',x=>x.employee_code?' — '+x.employee_code:'')}</select></div><div><label for="placeId">Tempat kegiatan *</label><select id="placeId" required><option value="">Pilih tempat</option>${opt(masterCache.places,x=>x.place_name,'id')}</select></div><div class="full"><label for="scheduleNotes">Catatan (opsional)</label><textarea id="scheduleNotes" rows="3" maxlength="500" placeholder="Keterangan tambahan"></textarea></div></div><div class="notice warn">Hari Minggu dan tanggal dengan kebijakan blokir tidak dapat dipilih. Hari Sabtu atau tanggal peringatan memerlukan konfirmasi.</div><div id="scheduleFormMessage" role="status" aria-live="polite"></div><div class="form-actions"><button type="button" class="secondary" id="cancelInput">Batal</button><button type="submit" id="saveScheduleButton">Simpan Jadwal</button></div></form></section>`;if(isPetugas)$('staffId').value=currentProfile.staff_id;$('cancelInput').addEventListener('click',()=>setPage('home'));$('scheduleForm').addEventListener('submit',saveSchedule)}catch(e){c.innerHTML=`<div class="panel"><h3>Formulir belum dapat dimuat</h3><div class="notice warn">${esc(e.message||'Periksa izin data master.')}</div></div>`}}
