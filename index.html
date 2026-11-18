@@ -1,39 +1,30 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="id">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#087f5b">
-<title>Sistem Jadwal | UPTD Puskesmas Geyer 2</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<title>Sistem Bendahara | UPTD Puskesmas Geyer 2</title>
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js"></script>
+<script src="app.js" defer></script>
 </head>
 <body>
-<header class="hero"><div class="hero-content">
-<img class="logo" id="headerLogo" src="assets/logo-puskesmas.png" alt="Logo UPTD Puskesmas Geyer 2">
-<h1>Sistem Jadwal</h1><div class="institution">UPTD PUSKESMAS GEYER 2</div></div></header>
-<main class="page-background">
-<section id="loginCard" class="card"><h2>Login Pengguna</h2><p class="muted">Masuk menggunakan akun yang telah didaftarkan administrator.</p>
-<form id="loginForm"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required placeholder="Masukkan email"><label for="password">Password</label><div class="password-wrap"><input id="password" type="password" autocomplete="current-password" required placeholder="Masukkan password"><button type="button" id="togglePassword">Lihat</button></div><button class="primary" id="loginButton" type="submit" style="width:100%;margin-top:20px">Masuk</button></form><div id="message" role="status" aria-live="polite"></div></section>
-<section id="dashboardCard" class="app-shell hidden" aria-label="Aplikasi Sistem Jadwal">
-<aside class="sidebar" id="sidebar">
-<div class="side-brand"><div class="brand-icon">✚</div><div><strong>Sistem Jadwal</strong><small>UPTD Puskesmas Geyer 2</small></div></div>
-<button class="nav-btn active" data-page="home"><span class="nav-icon">⌂</span>Beranda</button>
-<button class="nav-btn" data-page="rekap">
-  <span class="nav-icon">▤</span>Rekap
-</button>
-<button class="nav-btn" data-page="input"><span class="nav-icon">＋</span>Input Jadwal</button>
-<button class="nav-btn" data-page="import">
-  <span class="nav-icon">⇧</span>Import Excel
-</button>
-<button class="nav-btn" data-page="program"><span class="nav-icon">▤</span>Program</button>
-<button class="nav-btn" data-page="staff"><span class="nav-icon">♙</span>Staff / Petugas</button>
-<button class="nav-btn" data-page="places"><span class="nav-icon">⌖</span>Tempat</button>
-<button class="nav-btn" data-page="calendar"><span class="nav-icon">▦</span>Kalender</button>
-<button class="nav-btn" data-page="settings"><span class="nav-icon">⚙</span>Pengaturan</button>
-<div class="sidebar-bottom"><div class="profile-mini" id="sideProfile">Pengguna<small id="sideRole">Akun</small></div><button id="logoutButton" class="nav-btn" type="button"><span class="nav-icon">⇥</span>Keluar</button></div>
-</aside>
-<div class="workspace"><header class="topbar"><div style="display:flex;align-items:center;gap:11px"><button class="mobile-menu" id="mobileMenu" type="button" aria-label="Buka menu">☰</button><div><h2 id="pageTitle">Beranda</h2><p id="pageSubtitle">Ringkasan dan daftar jadwal kegiatan</p></div></div><div class="top-actions"><span class="role-chip" id="roleChip">ADMIN</span></div></header><div class="view" id="dashboardContent"><div class="loading">Memuat aplikasi...</div></div><div id="dashboardMessage" role="status" aria-live="polite" style="padding:0 24px 18px"></div></div>
-</section>
-<footer class="footer"><strong>UPTD Puskesmas Geyer 2</strong><span>Melayani dengan Profesional, Peduli untuk Masyarakat</span></footer>
-</main>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="app.js" defer></script>
+<header class="hero"><div class="hero-inner"><div class="mark">✚</div><div><div class="eyebrow">UPTD PUSKESMAS GEYER 2</div><h1>Sistem Bendahara</h1><p>Pengelolaan pengajuan dan pertanggungjawaban transport kegiatan</p></div></div></header>
+<main class="wrap">
+<section id="loginCard" class="login-card"><h2>Login Pengguna</h2><p class="muted">Masuk menggunakan akun yang telah didaftarkan administrator.</p><form id="loginForm"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required placeholder="Masukkan email"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required placeholder="Masukkan password"><button class="primary full" id="loginButton" type="submit">Masuk</button></form><p id="loginMessage" class="message" role="status"></p></section>
+<section id="appShell" class="app-shell hidden"><aside class="sidebar"><div class="brand"><div class="brand-mark">✚</div><div><b>Sistem Bendahara</b><small>UPTD Puskesmas Geyer 2</small></div></div>
+<nav id="nav">
+<button class="nav active" data-page="dashboard">▦ <span>Dashboard</span></button>
+<button class="nav" data-page="pengajuan">＋ <span>Pengajuan Transport</span></button>
+<button class="nav" data-page="riwayat">▤ <span>Riwayat Pengajuan</span></button>
+<button class="nav admin-only" data-page="verifikasi">✓ <span>Verifikasi Bendahara</span></button>
+<button class="nav admin-only" data-page="bbm">⛽ <span>Jenis BBM & Harga</span></button>
+<button class="nav admin-only" data-page="tempat">⌖ <span>Tempat & Jarak</span></button>
+<button class="nav admin-only" data-page="petugas">♙ <span>Petugas & Kendaraan</span></button>
+<button class="nav admin-only" data-page="laporan">▧ <span>Laporan & Rekap</span></button>
+</nav><div class="user-area"><div id="userName">Pengguna</div><small id="userRole">Role</small><button id="logoutButton" class="logout" type="button">Keluar</button></div></aside>
+<section class="main"><div class="topbar"><div><div class="eyebrow green">SISTEM KEUANGAN KEGIATAN</div><h2 id="pageTitle">Dashboard</h2></div><span id="roleBadge" class="role-badge">PETUGAS</span></div><div id="content" class="content"><div class="loading">Memuat data...</div></div><div id="appMessage" class="app-message" role="status"></div></section></section>
+<footer>UPTD Puskesmas Geyer 2 · Melayani dengan Profesional, Peduli untuk Masyarakat</footer>
+</main></body></html>
