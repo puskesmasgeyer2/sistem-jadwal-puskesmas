@@ -1,172 +1,1784 @@
-/* Sistem Bendahara UPTD Puskesmas Geyer 2
-   Menggunakan Supabase anon/publishable key. Jangan pernah menaruh service-role key di frontend. */
-const SUPABASE_URL='https://xqeuklqhkslfvhqrhyyr.supabase.co';
-const SUPABASE_PUBLISHABLE_KEY='sb_publishable_2hvrRkMS3sZ9CvyHHNdgFA_vsKJj8Mn';
-const db=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
-const $=id=>document.getElementById(id);
-let sessionUser=null,profile=null,schedules=[],claims=[],places=[],staff=[],programs=[],fuelTypes=[],fuelPrices=[],rates=[];
-const pages={dashboard:'Dashboard',pengajuan:'Pengajuan Transport',riwayat:'Riwayat Pengajuan',verifikasi:'Verifikasi Bendahara',bbm:'Jenis BBM & Harga',tempat:'Tempat & Jarak',petugas:'Petugas & Kendaraan',laporan:'Laporan & Rekap'};
-const money=n=>new Intl.NumberFormat('id-ID',{style:'currency',currency:'IDR',maximumFractionDigits:0}).format(Number(n||0));
-const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-const isFinance=()=>['admin','bendahara'].includes(String(profile?.role||'').toLowerCase());
-const today=()=>new Date().toISOString().slice(0,10);
-function notice(t,error=false){$('appMessage').style.color=error?'#b42318':'#087f5b';$('appMessage').textContent=t||'';}
-function statusLabel(s){return({draft:'Draft',submitted:'Menunggu verifikasi',approved:'Disetujui',rejected:'Ditolak',paid:'Dibayar'})[s]||s||'-';}
-function statusClass(s){return s==='submitted'?'submitted':s==='rejected'?'rejected':s==='paid'?'paid':'';}
-function fail(e){$('content').innerHTML=`<section class="panel"><h3>Data belum dapat dimuat</h3><p class="muted-note">${esc(e.message||e)}</p><p class="muted-note">Periksa koneksi, struktur tabel, dan kebijakan RLS Supabase.</p></section>`;}
-async function loadProfile(user){const {data,error}=await db.from('profiles').select('id,full_name,role,staff_id,is_active').eq('id',user.id).maybeSingle();if(error)throw error;if(!data||!data.is_active)throw new Error('Profil belum tersedia atau akun tidak aktif. Hubungi administrator.');profile=data;sessionUser=user;$('userName').textContent=data.full_name||user.email;$('userRole').textContent=(data.role||'petugas').toUpperCase();$('roleBadge').textContent=(data.role||'PETUGAS').toUpperCase();document.querySelectorAll('.admin-only').forEach(x=>x.classList.toggle('hidden',!isFinance()));$('loginCard').classList.add('hidden');$('appShell').classList.remove('hidden');await navigate('dashboard');}
-async function signOut(){await db.auth.signOut({scope:'local'});profile=null;sessionUser=null;$('appShell').classList.add('hidden');$('loginCard').classList.remove('hidden');}
-$('loginForm').addEventListener('submit',async e=>{e.preventDefault();const b=$('loginButton');b.disabled=true;b.textContent='Memeriksa...';$('loginMessage').textContent='';try{const {data,error}=await db.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});if(error)throw error;await loadProfile(data.user);}catch(err){$('loginMessage').textContent='Login gagal: '+err.message;}finally{b.disabled=false;b.textContent='Masuk';}});
-$('logoutButton').addEventListener('click',signOut);
-db.auth.onAuthStateChange((_event,session)=>{if(!session){profile=null;sessionUser=null;$('appShell').classList.add('hidden');$('loginCard').classList.remove('hidden');}});
-db.auth.getSession().then(({data,error})=>{if(!error&&data.session)loadProfile(data.session.user).catch(async e=>{await db.auth.signOut({scope:'local'});$('loginMessage').textContent=e.message;});});
-$('nav').addEventListener('click',e=>{const b=e.target.closest('[data-page]');if(b)navigate(b.dataset.page);});
-async function navigate(page){if(!pages[page])page='dashboard';if(['verifikasi','laporan','bbm','tempat','petugas'].includes(page)&&!isFinance()){notice('Menu ini hanya dapat diakses Bendahara atau Administrator.',true);return;}document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b.dataset.page===page));$('pageTitle').textContent=pages[page];$('content').innerHTML='<div class="loading">Memuat data...</div>';notice('');try{const fn={dashboard:renderDashboard,pengajuan:renderForm,riwayat:()=>renderClaims(false),verifikasi:()=>renderClaims(true),bbm:renderFuelAdmin,tempat:renderPlacesAdmin,petugas:renderStaffAdmin,laporan:renderReport}[page];await fn();}catch(e){fail(e);}}
-async function loadMasters(){const queries=await Promise.all([
- db.from('schedules').select('id,activity_date,program_id,staff_id,place_id,notes,status').eq('status','valid').order('activity_date',{ascending:false}).limit(3000),
- db.from('places').select('id,place_name,is_active').order('place_name'),db.from('staff').select('id,full_name,employee_code,golongan,pangkat,ruang,nomor_kendaraan,is_active').order('full_name'),
- db.from('programs').select('id,program_code,program_name,is_active').order('program_name'),db.from('fuel_types').select('id,jenis_bbm,is_active').order('jenis_bbm'),
- db.from('fuel_price_history').select('*').eq('is_active',true).order('berlaku_mulai',{ascending:false}),db.from('transport_rates').select('*').eq('is_active',true)
- ]);for(const q of queries)if(q.error)throw q.error;const [s,p,st,pr,ft,fp,rt]=queries.map(q=>q.data||[]);schedules=s;places=p;staff=st;programs=pr;fuelTypes=ft;fuelPrices=fp;rates=rt;}
-async function loadClaims(){const {data,error}=await db.from('transport_claims').select('*').order('created_at',{ascending:false}).limit(3000);if(error)throw error;claims=data||[];}
-function rateFor(placeId,method){return rates.find(r=>r.place_id===placeId&&r.metode===method)||rates.find(r=>!r.place_id&&r.metode===method);}
-function enrichSchedule(s){const p=places.find(x=>String(x.id)===String(s.place_id)),st=staff.find(x=>String(x.id)===String(s.staff_id)),pr=programs.find(x=>String(x.id)===String(s.program_id));return{...s,place_name:p?.place_name||'-',staff_name:st?.full_name||'-',employee_code:st?.employee_code||'-',golongan:st?.golongan||'-',nomor_kendaraan:String(st?.nomor_kendaraan||'').trim(),program_name:pr?.program_name||'-',program_code:pr?.program_code||'-'};}
-function enrichClaim(c){const s=enrichSchedule(schedules.find(x=>x.id===c.schedule_id)||{});return{...c,...s,nomor_kendaraan:c.nomor_kendaraan||s.nomor_kendaraan,claim_id:c.id,nominal_bbm:Number(c.nominal_bbm||0),total_amount:Number(c.total_amount??(Number(c.transport_amount||0)+Number(c.nominal_bbm||0)))};}
-function claimRows(finance){let rows=claims.map(enrichClaim);if(!finance&&profile.role==='petugas')rows=rows.filter(c=>c.staff_id===profile.staff_id||c.created_by===sessionUser.id);return rows;}
-function claimsTable(rows,actions=false){if(!rows.length)return'<div class="empty">Tidak ada data untuk filter yang dipilih.</div>';return`<div class="table-wrap"><table class="data-table"><thead><tr><th>No</th><th>Nama / NIP</th><th>Gol.</th><th>Tanggal kegiatan</th><th>Program</th><th>Lokasi</th><th>Jenis pengajuan</th><th>Biaya transport</th><th>Jumlah hari</th><th>Jumlah penerimaan</th><th>Nama SPBU</th><th>No. Kendaraan</th><th>Status / Tindakan</th></tr></thead><tbody>${rows.map((c,i)=>`<tr><td>${i+1}</td><td><b>${esc(c.staff_name)}</b><br><small>${esc(c.employee_code)}</small></td><td>${esc(c.golongan)}</td><td>${esc(c.activity_date)}</td><td>${esc(c.program_name)}</td><td>${esc(c.place_name)}</td><td>${c.jenis_bbm?'BBM':'8 Jam'}</td><td class="money">${money(c.transport_amount)}</td><td>${Number(c.jumlah_hari||1)}</td><td class="money">${money(c.total_amount)}</td><td>${esc(c.nama_spbu||'-')}</td><td>${esc(c.nomor_kendaraan)}</td><td><span class="status ${statusClass(c.status)}">${esc(statusLabel(c.status))}</span>${actions&&['submitted','draft'].includes(c.status)?`<div class="table-actions"><button class="btn-sm" data-action="approve" data-id="${esc(c.claim_id)}">Setujui</button><button class="btn-sm btn-red" data-action="reject" data-id="${esc(c.claim_id)}">Tolak</button></div>`:''}</td></tr>`).join('')}</tbody></table></div>`;}
-function filterPanel(){const now=new Date();return`<section class="panel"><h3>Filter daftar pengajuan</h3><div class="filters"><div><label for="filterMonth">Bulan</label><select id="filterMonth"><option value="">Semua bulan</option>${['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'].map((m,i)=>`<option value="${String(i+1).padStart(2,'0')}" ${i===now.getMonth()?'selected':''}>${m}</option>`).join('')}</select></div><div><label for="filterYear">Tahun</label><select id="filterYear"><option value="">Semua tahun</option>${Array.from({length:7},(_,i)=>now.getFullYear()-3+i).map(y=>`<option ${y===now.getFullYear()?'selected':''}>${y}</option>`).join('')}</select></div><div><label for="filterProgram">Nama program</label><select id="filterProgram"><option value="">Semua program</option>${programs.filter(p=>p.is_active).map(p=>`<option value="${esc(p.id)}">${esc(p.program_name)}</option>`).join('')}</select></div><button id="showFiltered">Tampilkan Data</button></div></section>`;}
-function applyClaimFilter(rows){const m=$('filterMonth').value,y=$('filterYear').value,p=$('filterProgram').value;return rows.filter(c=>(!m||String(c.activity_date||'').slice(5,7)===m)&&(!y||String(c.activity_date||'').slice(0,4)===y)&&(!p||c.program_id===p));}
-async function renderDashboard(){await loadMasters();await loadClaims();const rows=claimRows(true),pending=rows.filter(x=>x.status==='submitted'),approved=rows.filter(x=>['approved','paid'].includes(x.status)),total=rows.reduce((a,x)=>a+Number(x.total_amount||0),0);$('content').innerHTML=`<div class="cards"><div class="metric"><small>Jadwal valid</small><strong>${schedules.length}</strong></div><div class="metric"><small>Menunggu verifikasi</small><strong>${pending.length}</strong></div><div class="metric"><small>Disetujui / dibayar</small><strong>${approved.length}</strong></div><div class="metric"><small>Total pengajuan</small><strong style="font-size:19px">${money(total)}</strong></div></div><section class="panel"><div class="section-head"><h3>Pengajuan terbaru</h3><button id="dashHistory" class="btn-sm btn-light">Lihat daftar</button></div>${claimsTable(rows.slice(0,8))}</section>`;$('dashHistory').onclick=()=>navigate('riwayat');}
-async function renderForm(){
- await loadMasters();
- await loadClaims();
+const SUPABASE_URL="https://xqeuklqhkslfvhqrhyyr.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY="sb_publishable_2hvrRkMS3sZ9CvyHHNdgFA_vsKJj8Mn";
+const client=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
 
- const mine=schedules.filter(s=>profile.role!=='petugas'||s.staff_id===profile.staff_id);
- const alreadySubmitted=new Set(claims.filter(c=>c.status!=='rejected').map(c=>c.schedule_id));
- const pendingSchedules=mine.filter(s=>!alreadySubmitted.has(s.id));
- const activeFuel=fuelTypes.filter(f=>f.is_active);
- const effectivePrice=name=>fuelPrices.find(x=>x.jenis_bbm===name&&x.is_active&&x.berlaku_mulai<=today()&&(!x.berlaku_sampai||x.berlaku_sampai>=today()));
- const TARIF_8_JAM=150000;
+// Pemeriksaan perubahan password dilakukan setiap 5 detik.
+const SESSION_CHECK_INTERVAL = 5 * 1000;
+let sessionGuardTimer = null;
+let sessionEnding = false;
 
- const rows=pendingSchedules.map(s=>{
-  const x=enrichSchedule(s),br=rateFor(s.place_id,'bbm');
-  const km=Number(br?.jarak_km||0);
-  const fuelOptions=activeFuel.map(f=>`<option value="${esc(f.jenis_bbm)}">${esc(f.jenis_bbm)}</option>`).join('');
-  const vehicle=x.nomor_kendaraan==='-'?'':x.nomor_kendaraan;
-  return `<tr data-row="${esc(s.id)}">
-   <td>${esc(s.activity_date)}</td>
-   <td><b>${esc(x.program_name)}</b><br><small>${esc(x.program_code)}</small></td>
-   <td>${esc(x.staff_name)}<br><small>${esc(x.employee_code)}</small></td>
-   <td>${esc(x.place_name)}</td>
-   <td><select class="row-type" aria-label="Jenis pengajuan"><option value="">Pilih jenis</option><option value="bbm">BBM</option><option value="8_jam">8 Jam</option></select></td>
-   <td class="money" data-distance>${km?esc(km)+' km':'—'}</td>
-   <td><select class="row-fuel" aria-label="Jenis BBM" disabled><option value="">Pilih BBM</option>${fuelOptions}</select></td>
-   <td class="money" data-price>—</td>
-   <td class="money" data-litres>—</td>
-   <td class="money" data-fuel-total>—</td>
-   <td class="money" data-transport>—</td>
-   <td><input class="row-vehicle" maxlength="30" value="${esc(vehicle)}" placeholder="${vehicle?'':'Belum ada di master petugas'}" aria-label="Plat kendaraan otomatis" readonly></td>
-   <td><input class="row-spbu" maxlength="150" placeholder="Nama SPBU" aria-label="Nama SPBU" disabled></td>
-   <td><input class="row-notes" maxlength="500" placeholder="Keterangan" aria-label="Keterangan"></td>
-   <td><button class="btn-sm row-submit" data-submit-row="${esc(s.id)}" disabled>Ajukan</button></td>
-  </tr>`;
- }).join('');
-
- $('content').innerHTML=`<section class="panel"><div class="section-head"><div><h3>Pengajuan transport berdasarkan jadwal</h3><p class="muted-note">Data tanggal, program, petugas, dan tempat diambil otomatis dari jadwal valid. Pilih jenis pengajuan pada setiap baris. Tarif 8 Jam ditetapkan sebesar Rp150.000.</p></div><button id="refreshScheduleClaims" class="btn-sm btn-light">Muat ulang jadwal</button></div>
- <div class="cards compact-cards"><div class="metric"><small>Jadwal belum diajukan</small><strong>${pendingSchedules.length}</strong></div><div class="metric"><small>Jenis BBM aktif</small><strong>${activeFuel.length}</strong></div></div>
- ${!pendingSchedules.length?'<div class="empty">Semua jadwal yang tersedia sudah memiliki pengajuan, atau belum ada jadwal valid.</div>':`<div class="table-wrap bulk-claim-wrap"><table class="data-table bulk-claim-table"><thead><tr><th>Tanggal</th><th>Program</th><th>Petugas / NIP</th><th>Tempat</th><th>Jenis Pengajuan</th><th>Jarak PP</th><th>Jenis BBM</th><th>Harga/liter</th><th>Liter</th><th>Nominal BBM</th><th>Transport</th><th>Plat kendaraan</th><th>Nama SPBU</th><th>Keterangan</th><th>Aksi</th></tr></thead><tbody>${rows}</tbody></table></div>`}
- <div class="notice">Mode BBM: kebutuhan dihitung 1 liter per 8 km (dibulatkan ke atas), harga mengikuti master harga BBM, dan plat kendaraan diambil dari master petugas. Mode 8 Jam: tarif tetap Rp150.000 tanpa pengisian BBM atau kendaraan.</div></section>`;
-
- $('refreshScheduleClaims').onclick=()=>renderForm();
-
- const updateRow=row=>{
-  const type=row.querySelector('.row-type').value;
-  const fuelSelect=row.querySelector('.row-fuel');
-  const spbu=row.querySelector('.row-spbu');
-  const vehicle=row.querySelector('.row-vehicle').value.trim();
-  const km=Number((row.querySelector('[data-distance]')?.textContent||'').replace(/[^0-9.,]/g,'').replace(',','.'))||0;
-  const btn=row.querySelector('.row-submit');
-  const priceCell=row.querySelector('[data-price]');
-  const litresCell=row.querySelector('[data-litres]');
-  const totalCell=row.querySelector('[data-fuel-total]');
-  const transportCell=row.querySelector('[data-transport]');
-
-  if(type==='bbm'){
-   fuelSelect.disabled=false;spbu.disabled=false;
-   transportCell.textContent='—';
-   const fuel=fuelSelect.value,priceRow=effectivePrice(fuel),price=Number(priceRow?.harga_per_liter||0);
-   const litres=km>0?Math.ceil(km/8):0;
-   priceCell.textContent=price?money(price):'—';
-   litresCell.textContent=litres?`${litres} L`:'—';
-   totalCell.textContent=price&&litres?money(price*litres):'—';
-   btn.dataset.price=String(price);btn.dataset.litres=String(litres);
-   btn.disabled=!(km>0&&fuel&&price>0&&litres>0&&vehicle);
-   btn.dataset.mode='bbm';
-  }else if(type==='8_jam'){
-   fuelSelect.value='';fuelSelect.disabled=true;spbu.value='';spbu.disabled=true;
-   priceCell.textContent='—';litresCell.textContent='—';totalCell.textContent='—';
-   transportCell.textContent=money(TARIF_8_JAM);
-   btn.dataset.price='0';btn.dataset.litres='0';btn.dataset.mode='8_jam';
-   btn.disabled=false;
-  }else{
-   fuelSelect.value='';fuelSelect.disabled=true;spbu.value='';spbu.disabled=true;
-   priceCell.textContent='—';litresCell.textContent='—';totalCell.textContent='—';transportCell.textContent='—';
-   btn.dataset.price='0';btn.dataset.litres='0';btn.dataset.mode='';
-   btn.disabled=true;
-  }
- };
-
- $('content').addEventListener('change',e=>{
-  if(e.target.matches('.row-type,.row-fuel'))updateRow(e.target.closest('tr'));
- });
- $('content').addEventListener('click',async e=>{
-  const btn=e.target.closest('[data-submit-row]');if(!btn)return;
-  const id=btn.dataset.submitRow,row=btn.closest('tr'),s=schedules.find(x=>x.id===id);if(!s)return;
-  const mode=row.querySelector('.row-type').value;
-  if(!mode){notice('Pilih Jenis Pengajuan terlebih dahulu.',true);return;}
-  const notes=row.querySelector('.row-notes').value.trim();
-  const vehicle=mode==='bbm'?row.querySelector('.row-vehicle').value.trim():null;
-  const spbu=mode==='bbm'?row.querySelector('.row-spbu').value.trim():null;
-  let fuel=null,price=0,litres=0,fuelCost=0,transport=0;
-
-  if(mode==='bbm'){
-   fuel=row.querySelector('.row-fuel').value;
-   price=Number(btn.dataset.price||0);litres=Number(btn.dataset.litres||0);
-   const km=Number((row.querySelector('[data-distance]')?.textContent||'').replace(/[^0-9.,]/g,'').replace(',','.'))||0;
-   if(!fuel||!price||!litres||!km){notice('Pilih BBM dan pastikan harga serta jarak tersedia.',true);return;}
-   if(!vehicle){notice('Nomor kendaraan belum diisi pada menu Petugas & Kendaraan.',true);return;}
-   fuelCost=price*litres;
-  }else{
-   transport=TARIF_8_JAM;
-  }
-
-  btn.disabled=true;btn.textContent='Mengirim…';
-  try{
-   const payload={
-    schedule_id:s.id,transport_amount:transport,jenis_bbm:fuel,
-    kebutuhan_bbm_liter:litres,harga_per_liter:price,nominal_bbm:fuelCost,
-    total_amount:transport+fuelCost,status:'submitted',catatan:notes||null,
-    created_by:sessionUser.id,nama_spbu:spbu,jumlah_hari:1,
-    nomor_kendaraan:vehicle
-   };
-   const {error}=await db.from('transport_claims').insert(payload);if(error)throw error;
-   claims.push({id:`local-${s.id}`,schedule_id:s.id,...payload,created_at:new Date().toISOString()});
-   row.remove();
-   const body=$('content').querySelector('.bulk-claim-table tbody');
-   if(body&&!body.querySelector('tr'))body.innerHTML='<tr><td colspan="15" class="empty">Semua jadwal sudah diajukan.</td></tr>';
-   notice(`Pengajuan ${mode==='bbm'?'BBM':'8 Jam'} untuk ${enrichSchedule(s).staff_name} — ${enrichSchedule(s).program_name} berhasil dikirim.`);
-  }catch(err){notice('Gagal menyimpan pengajuan: '+err.message,true);btn.disabled=false;btn.textContent='Ajukan';}
- });
+function sessionMarkerKey(userId) {
+  return `jadwal_password_reset_at_${userId}`;
 }
-async function renderClaims(finance){await loadMasters();await loadClaims();let rows=claimRows(finance);$('content').innerHTML=filterPanel()+`<section class="panel"><div class="section-head"><h3>${finance?'Daftar pengajuan untuk diverifikasi':'Riwayat pengajuan'}</h3><button id="refreshClaims" class="btn-sm btn-light">Muat ulang</button></div><div id="claimResult">${claimsTable(rows,finance)}</div></section>`;$('showFiltered').onclick=()=>{$('claimResult').innerHTML=claimsTable(applyClaimFilter(rows),finance);};$('refreshClaims').onclick=()=>renderClaims(finance);$('claimResult').addEventListener('click',async e=>{const b=e.target.closest('[data-action]');if(!b)return;const action=b.dataset.action,id=b.dataset.id;if(!confirm(action==='approve'?'Setujui pengajuan ini?':'Tolak pengajuan ini?'))return;const patch={status:action==='approve'?'approved':'rejected',updated_by:sessionUser.id,updated_at:new Date().toISOString()};const {error}=await db.from('transport_claims').update(patch).eq('id',id);if(error){notice('Gagal memperbarui status: '+error.message,true);return;}notice(action==='approve'?'Pengajuan disetujui.':'Pengajuan ditolak.');await renderClaims(finance);});}
-async function renderFuelAdmin(){await loadMasters();const current=fuelTypes.map(f=>{const price=fuelPrices.find(p=>p.jenis_bbm===f.jenis_bbm&&p.berlaku_mulai<=today()&&(!p.berlaku_sampai||p.berlaku_sampai>=today()));return{...f,harga:price?.harga_per_liter??''};});$('content').innerHTML=`<section class="panel"><h3>Tambah jenis BBM / harga</h3><form id="fuelForm" class="form-inline"><div><label>Jenis BBM</label><input id="fuelName" required placeholder="Contoh: Pertamax"></div><div><label>Harga per liter (Rp)</label><input id="fuelPriceNew" type="number" min="1" required></div><div><label>Berlaku mulai</label><input id="fuelStart" type="date" value="${today()}" required></div><div><label>Keterangan</label><input id="fuelNote"></div><div class="span-all"><button type="submit">Simpan Jenis / Harga BBM</button></div></form></section><section class="panel"><h3>Daftar jenis BBM dan harga aktif</h3>${current.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>Jenis BBM</th><th>Harga / liter</th><th>Status</th><th>Aksi</th></tr></thead><tbody>${current.map(f=>`<tr><td>${esc(f.jenis_bbm)}</td><td>${money(f.harga)}</td><td>${f.is_active?'Aktif':'Nonaktif'}</td><td><button class="btn-sm btn-light" data-edit-fuel="${esc(f.id)}">Ubah harga</button> <button class="btn-sm btn-red" data-disable-fuel="${esc(f.id)}">Nonaktifkan</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">Belum ada jenis BBM.</div>'}</section>`;
-$('fuelForm').onsubmit=async e=>{e.preventDefault();try{const name=$('fuelName').value.trim(),price=Number($('fuelPriceNew').value),start=$('fuelStart').value;if(!fuelTypes.some(f=>f.jenis_bbm.toLowerCase()===name.toLowerCase())){const {error}=await db.from('fuel_types').insert({jenis_bbm:name,is_active:true});if(error)throw error;}const {error:oldErr}=await db.from('fuel_price_history').update({berlaku_sampai:new Date(new Date(start+'T00:00:00').getTime()-86400000).toISOString().slice(0,10),is_active:false}).eq('jenis_bbm',name).eq('is_active',true).is('berlaku_sampai',null);if(oldErr)throw oldErr;const {error}=await db.from('fuel_price_history').insert({jenis_bbm:name,harga_per_liter:price,berlaku_mulai:start,is_active:true,keterangan:$('fuelNote').value.trim()||null});if(error)throw error;notice('Jenis BBM dan harga berhasil disimpan.');await renderFuelAdmin();}catch(err){notice('Gagal menyimpan BBM: '+err.message,true);}};
-$('content').onclick=async e=>{const edit=e.target.closest('[data-edit-fuel]'),del=e.target.closest('[data-disable-fuel]');if(edit){const f=fuelTypes.find(x=>x.id===edit.dataset.editFuel);const p=prompt(`Masukkan harga baru per liter untuk ${f.jenis_bbm}:`);if(p===null)return;const price=Number(p);if(!(price>0))return notice('Harga harus lebih dari nol.',true);$('fuelName').value=f.jenis_bbm;$('fuelPriceNew').value=price;$('fuelStart').focus();notice('Isi tanggal berlaku dan klik Simpan Jenis / Harga BBM.');}if(del&&confirm('Nonaktifkan jenis BBM ini? Riwayat harga tidak dihapus.')){const f=fuelTypes.find(x=>x.id===del.dataset.disableFuel);const {error}=await db.from('fuel_types').update({is_active:false}).eq('id',f.id);if(error)notice(error.message,true);else{notice('Jenis BBM dinonaktifkan.');await renderFuelAdmin();}}};}
-async function renderPlacesAdmin(){await loadMasters();const active=places.filter(p=>p.is_active);$('content').innerHTML=`<section class="panel"><h3>Tambah tempat dan jarak</h3><form id="placeForm" class="form-inline"><div><label>Nama tempat</label><input id="placeName" required placeholder="Nama lokasi kegiatan"></div><div><label>Jarak pulang-pergi (km)</label><input id="placeKm" type="number" min="0.1" step="0.01" required></div><div class="span-all"><button type="submit">Simpan Tempat & Jarak</button></div></form></section><section class="panel"><h3>Daftar tempat dan jarak</h3><div class="table-wrap"><table class="data-table"><thead><tr><th>Nama tempat</th><th>Jarak PP (km)</th><th>Tarif 8 Jam (baku)</th><th>Aksi</th></tr></thead><tbody>${active.map(p=>{const r=rateFor(p.id,'bbm');return`<tr><td>${esc(p.place_name)}</td><td>${esc(r?.jarak_km??'-')}</td><td>${money(150000)}</td><td><button class="btn-sm btn-light" data-edit-place="${esc(p.id)}">Edit</button> <button class="btn-sm btn-red" data-del-place="${esc(p.id)}">Nonaktifkan</button></td></tr>`}).join('')}</tbody></table></div></section>`;
-$('placeForm').onsubmit=async e=>{e.preventDefault();try{const name=$('placeName').value.trim(),km=Number($('placeKm').value);let p=places.find(x=>x.place_name.toLowerCase()===name.toLowerCase());if(!p){const {data,error}=await db.from('places').insert({place_name:name,is_active:true}).select().single();if(error)throw error;p=data;}let r=rateFor(p.id,'bbm');if(r){const {error}=await db.from('transport_rates').update({jarak_km:km,is_active:true,updated_at:new Date().toISOString()}).eq('id',r.id);if(error)throw error;}else{const {error}=await db.from('transport_rates').insert({place_id:p.id,metode:'bbm',jarak_km:km,satuan_tarif:'per_perjalanan',tarif:0,is_active:true,keterangan:`Jarak pulang-pergi dalam km - ${name}`});if(error)throw error;}notice('Tempat dan jarak berhasil disimpan.');await renderPlacesAdmin();}catch(err){notice('Gagal menyimpan tempat: '+err.message,true);}};
-$('content').onclick=async e=>{const edit=e.target.closest('[data-edit-place]'),del=e.target.closest('[data-del-place]');if(edit){const p=places.find(x=>x.id===edit.dataset.editPlace),r=rateFor(p.id,'bbm'),name=prompt('Nama tempat:',p.place_name);if(name===null)return;const km=prompt('Jarak pulang-pergi (km):',r?.jarak_km??'');if(km===null)return;try{const {error:e1}=await db.from('places').update({place_name:name.trim()}).eq('id',p.id);if(e1)throw e1;if(r){const {error}=await db.from('transport_rates').update({jarak_km:Number(km),updated_at:new Date().toISOString()}).eq('id',r.id);if(error)throw error;}else{const {error}=await db.from('transport_rates').insert({place_id:p.id,metode:'bbm',jarak_km:Number(km),satuan_tarif:'per_perjalanan',tarif:0,is_active:true});if(error)throw error;}notice('Data tempat diperbarui.');await renderPlacesAdmin();}catch(err){notice(err.message,true);}}if(del&&confirm('Nonaktifkan tempat ini?')){const {error}=await db.from('places').update({is_active:false}).eq('id',del.dataset.delPlace);if(error)notice(error.message,true);else{notice('Tempat dinonaktifkan.');await renderPlacesAdmin();}}};}
-async function renderStaffAdmin(){await loadMasters();$('content').innerHTML=`<section class="panel"><h3>Tambah petugas</h3><form id="staffForm" class="form-inline"><div><label>Nama petugas</label><input id="staffName" required></div><div><label>NIP</label><input id="staffNip"></div><div><label>Golongan</label><input id="staffGol"></div><div><label>Nomor kendaraan</label><input id="staffVehicle" placeholder="Contoh: K 1234 XX"></div><div class="span-all"><button type="submit">Simpan Petugas</button></div></form></section><section class="panel"><h3>Daftar petugas dan kendaraan</h3><div class="table-wrap"><table class="data-table"><thead><tr><th>Nama</th><th>NIP</th><th>Golongan</th><th>Nomor kendaraan</th><th>Aksi</th></tr></thead><tbody>${staff.filter(s=>s.is_active).map(s=>`<tr><td>${esc(s.full_name)}</td><td>${esc(s.employee_code||'-')}</td><td>${esc(s.golongan||'-')}</td><td>${esc(s.nomor_kendaraan||'-')}</td><td><button class="btn-sm btn-light" data-edit-staff="${esc(s.id)}">Edit</button> <button class="btn-sm btn-red" data-del-staff="${esc(s.id)}">Hapus</button></td></tr>`).join('')}</tbody></table></div></section>`;
-$('staffForm').onsubmit=async e=>{e.preventDefault();try{const {error}=await db.from('staff').insert({full_name:$('staffName').value.trim(),employee_code:$('staffNip').value.trim()||null,golongan:$('staffGol').value.trim()||null,nomor_kendaraan:$('staffVehicle').value.trim()||null,is_active:true});if(error)throw error;notice('Petugas berhasil ditambahkan.');await renderStaffAdmin();}catch(err){notice('Gagal menambah petugas: '+err.message,true);}};
-$('content').onclick=async e=>{const edit=e.target.closest('[data-edit-staff]'),del=e.target.closest('[data-del-staff]');if(edit){const s=staff.find(x=>x.id===edit.dataset.editStaff);const name=prompt('Nama petugas:',s.full_name);if(name===null)return;const nip=prompt('NIP:',s.employee_code||'');if(nip===null)return;const gol=prompt('Golongan:',s.golongan||'');if(gol===null)return;const vehicle=prompt('Nomor kendaraan:',s.nomor_kendaraan||'');if(vehicle===null)return;const {error}=await db.from('staff').update({full_name:name.trim(),employee_code:nip.trim()||null,golongan:gol.trim()||null,nomor_kendaraan:vehicle.trim()||null}).eq('id',s.id);if(error)notice(error.message,true);else{notice('Data petugas diperbarui.');await renderStaffAdmin();}}if(del&&confirm('Hapus/nonaktifkan petugas ini? Data lama tetap dipertahankan untuk riwayat.')){const {error}=await db.from('staff').update({is_active:false}).eq('id',del.dataset.delStaff);if(error)notice(error.message,true);else{notice('Petugas dinonaktifkan.');await renderStaffAdmin();}}};}
-async function renderReport(){await loadMasters();await loadClaims();const rows=claimRows(true).filter(c=>['approved','paid'].includes(c.status));const total=rows.reduce((a,c)=>a+Number(c.total_amount||0),0);$('content').innerHTML=`<section class="panel"><div class="section-head"><h3>Rekap pertanggungjawaban transport</h3><button id="exportCsv">Unduh CSV</button></div><div class="cards"><div class="metric"><small>Disetujui / dibayar</small><strong>${rows.length}</strong></div><div class="metric"><small>Total penerimaan</small><strong style="font-size:20px">${money(total)}</strong></div></div>${claimsTable(rows)}</section>`;$('exportCsv').onclick=()=>exportCsv(rows);}
-function exportCsv(rows){const keys=['activity_date','program_name','staff_name','employee_code','golongan','place_name','transport_amount','jumlah_hari','total_amount','nama_spbu','nomor_kendaraan','jenis_bbm','kebutuhan_bbm_liter','harga_per_liter','nominal_bbm','status'];const csv=[keys.join(','),...rows.map(r=>keys.map(k=>'"'+String(r[k]??'').replace(/"/g,'""')+'"').join(','))].join('\r\n');const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='rekap-bendahara.csv';a.click();URL.revokeObjectURL(a.href);}
+
+function stopSessionGuard() {
+  if (sessionGuardTimer) {
+    clearInterval(sessionGuardTimer);
+    sessionGuardTimer = null;
+  }
+}
+
+async function endSessionForPasswordReset(userId) {
+  if (sessionEnding || currentUser?.id !== userId) return;
+  sessionEnding = true;
+  stopSessionGuard();
+  await client.auth.signOut({ scope: 'local' });
+  currentProfile = null;
+  currentUser = null;
+  $('loginCard').classList.remove('hidden');
+  $('dashboardCard').classList.add('hidden');
+  $('message').textContent =
+    'Password akun telah direset oleh administrator. Silakan login kembali menggunakan password terbaru.';
+}
+
+function startSessionGuard(userId) {
+  stopSessionGuard();
+  sessionGuardTimer = setInterval(async () => {
+    if (sessionEnding || !currentUser || currentUser.id !== userId) return;
+
+    const { data, error } = await client
+      .from('profiles')
+      .select('is_active, password_reset_at')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error) return; // Coba lagi setelah 5 detik jika koneksi sementara gagal.
+
+    if (!data || !data.is_active) {
+      sessionEnding = true;
+      stopSessionGuard();
+      await client.auth.signOut({ scope: 'local' });
+      currentProfile = null;
+      currentUser = null;
+      $('loginCard').classList.remove('hidden');
+      $('dashboardCard').classList.add('hidden');
+      $('message').textContent = 'Akun tidak aktif. Silakan hubungi administrator.';
+      return;
+    }
+
+    const key = sessionMarkerKey(userId);
+    const currentMarker = data.password_reset_at || '';
+    const savedMarker = sessionStorage.getItem(key);
+    if (savedMarker === null) {
+      sessionStorage.setItem(key, currentMarker);
+      return;
+    }
+    if (savedMarker !== currentMarker) await endSessionForPasswordReset(userId);
+  }, SESSION_CHECK_INTERVAL);
+}
+const $=id=>document.getElementById(id);let currentProfile=null,currentUser=null,currentPage=sessionStorage.getItem('jadwalCurrentPage')||'home',allSchedules=[],currentPageNumber=1,pageSize=10,masterCache={programs:[],staff:[],places:[]},masterType='programs';
+const pageInfo={home:['Beranda','Ringkasan dan daftar jadwal kegiatan'],rekap: ['Rekap', 'Rekapitulasi kegiatan berdasarkan petugas'],input:['Input Jadwal','Tambahkan jadwal kegiatan baru'],import: ['Import Excel', 'Impor jadwal kegiatan dari file Excel'],program:['Program','Daftar program kegiatan'],staff:['Staff / Petugas','Daftar petugas terdaftar'],places:['Tempat','Daftar tempat kegiatan'],calendar:['Kalender','Kalender kerja dan kebijakan tanggal'],accounts:['Pengelolaan Akun', 'Kelola akun operator dan petugas'],settings:['Pengaturan','Pengaturan akun dan akses pengguna']};
+function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
+function msg(t,error=false){$('dashboardMessage').textContent=t||'';$('dashboardMessage').style.color=error?'#b42318':'#087f5b'}
+function setPage(page){
+  if(!pageInfo[page]) page='home';
+
+  currentPage=page;
+  sessionStorage.setItem('jadwalCurrentPage',page);
+  currentPageNumber=1;
+
+  document.querySelectorAll('.nav-btn[data-page]')
+    .forEach(b=>b.classList.toggle('active',b.dataset.page===page));
+
+  $('pageTitle').textContent=pageInfo[page][0];
+  $('pageSubtitle').textContent=pageInfo[page][1];
+  $('sidebar').classList.remove('open');
+  msg('');
+  renderPage(page);
+}
+
+function ensureAccountNav(isAdmin) {
+  const sidebar = $('sidebar');
+  const settingsButton = sidebar.querySelector(
+    '.nav-btn[data-page="settings"]'
+  );
+  let button = sidebar.querySelector(
+    '.nav-btn[data-page="accounts"]'
+  );
+
+  if (!isAdmin) {
+    button?.remove();
+    return;
+  }
+
+  if (!button) {
+    button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'nav-btn';
+    button.dataset.page = 'accounts';
+    button.textContent = '♙ Pengelolaan Akun';
+    button.addEventListener('click', () => setPage('accounts'));
+
+    if (settingsButton) {
+      sidebar.insertBefore(button, settingsButton);
+    } else {
+      sidebar.appendChild(button);
+    }
+  }
+}
+
+function fallbackLogo(){const svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M50 3 91 26v48L50 97 9 74V26Z" fill="#fff" stroke="#075c43" stroke-width="5"/><path d="M40 19h20v21h21v20H60v21H40V60H19V40h21Z" fill="#087f5b"/><circle cx="58" cy="49" r="8" fill="none" stroke="#fff" stroke-width="2"/><circle cx="70" cy="49" r="8" fill="none" stroke="#fff" stroke-width="2"/></svg>';$('headerLogo').src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)}
+$('headerLogo').addEventListener('error',fallbackLogo);$('togglePassword').addEventListener('click',()=>{const p=$('password');p.type=p.type==='password'?'text':'password';$('togglePassword').textContent=p.type==='password'?'Lihat':'Sembunyikan'});
+async function showSession(session, freshLogin = false) {
+  if (!session) {
+    stopSessionGuard();
+    currentProfile = null;
+    currentUser = null;
+    $('loginCard').classList.remove('hidden');
+    $('dashboardCard').classList.add('hidden');
+    return;
+  }
+
+  if (
+    !freshLogin &&
+    currentUser?.id === session.user.id &&
+    !$('dashboardCard').classList.contains('hidden')
+  ) {
+    currentUser = session.user;
+    return;
+  }
+
+  currentUser = session.user;
+  const { data, error } = await client
+    .from('profiles')
+    .select('full_name,role,staff_id,is_active,password_reset_at')
+    .eq('id', session.user.id)
+    .maybeSingle();
+
+  if (error || !data || !data.is_active) {
+    stopSessionGuard();
+    await client.auth.signOut({ scope: 'local' });
+    currentProfile = null;
+    currentUser = null;
+    $('loginCard').classList.remove('hidden');
+    $('dashboardCard').classList.add('hidden');
+    $('message').textContent =
+      'Profil belum tersedia atau akun belum aktif. Hubungi administrator.';
+    return;
+  }
+
+  // Hanya login baru yang memperbarui penanda lokal. Pemulihan sesi lama
+  // tidak boleh menimpa penanda sebelumnya karena perubahan harus terdeteksi.
+  const markerKey = sessionMarkerKey(session.user.id);
+  if (freshLogin || sessionStorage.getItem(markerKey) === null) {
+    sessionStorage.setItem(markerKey, data.password_reset_at || '');
+  }
+
+  sessionEnding = false;
+  currentProfile = data;
+  $('loginCard').classList.add('hidden');
+  $('dashboardCard').classList.remove('hidden');
+  $('sideProfile').innerHTML =
+    esc(data.full_name || 'Pengguna') +
+    '<small id="sideRole">' + esc(data.role || 'petugas') + '</small>';
+  $('roleChip').textContent = (data.role || 'petugas').toUpperCase();
+  ensureAccountNav(data.role === 'admin');
+  startSessionGuard(session.user.id);
+
+  const savedPage = sessionStorage.getItem('jadwalCurrentPage') || 'home';
+  setPage(pageInfo[savedPage] ? savedPage : 'home');
+}
+$('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginButton').disabled=true;$('loginButton').textContent='Memeriksa akun...';$('message').textContent='';try{const {data,error}=await client.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});if(error)throw error;await showSession(data.session, true)}catch(e){$('message').textContent='Login gagal. Periksa email, password, dan koneksi.'}finally{$('loginButton').disabled=false;$('loginButton').textContent='Masuk'}});
+$('logoutButton').addEventListener('click',async()=>{stopSessionGuard();const {error}=await client.auth.signOut();if(error){msg('Gagal keluar. Silakan coba lagi.',true);return}msg('');$('message').textContent='';await showSession(null)});$('mobileMenu').addEventListener('click',()=>$('sidebar').classList.toggle('open'));document.querySelectorAll('.nav-btn[data-page]').forEach(b=>b.addEventListener('click',()=>setPage(b.dataset.page)));
+async function fetchMaster(table,columns,order){const {data,error}=await client.from(table).select(columns).eq('is_active',true).order(order,{ascending:true}).limit(1000);if(error)throw error;return data||[]}
+async function loadMasters(){const [programs,staff,places]=await Promise.all([fetchMaster('programs','id,program_code,program_name,is_active','program_name'),fetchMaster('staff','id,employee_code,full_name,is_active','full_name'),fetchMaster('places','id,place_name,is_active','place_name')]);masterCache={programs,staff,places};return masterCache}
+
+function monthYearFilters() {
+  const now = new Date();
+  const years = [];
+
+  for (
+    let y = 2026;
+    y <= Math.max(2032, now.getFullYear() + 2);
+    y++
+  ) {
+    years.push(y);
+  }
+
+  return `
+    <div class="filters">
+
+      <div>
+        <label for="filterMonth">Bulan</label>
+        <select id="filterMonth">
+          <option value="all">Semua bulan</option>
+          ${[
+            'Januari','Februari','Maret','April',
+            'Mei','Juni','Juli','Agustus',
+            'September','Oktober','November','Desember'
+          ].map((m, i) => `
+            <option value="${i + 1}"
+              ${i + 1 === now.getMonth() + 1 ? 'selected' : ''}>
+              ${m}
+            </option>
+          `).join('')}
+        </select>
+      </div>
+
+      <div>
+        <label for="filterYear">Tahun</label>
+        <select id="filterYear">
+          ${years.map(y => `
+            <option value="${y}"
+              ${y === now.getFullYear() ? 'selected' : ''}>
+              ${y}
+            </option>
+          `).join('')}
+          <option value="all">Semua tahun</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="filterDateStart">Tanggal Mulai</label>
+        <input type="date" id="filterDateStart">
+      </div>
+
+      <div>
+        <label for="filterDateEnd">Tanggal Akhir</label>
+        <input type="date" id="filterDateEnd">
+      </div>
+
+      <div class="filter-search">
+        <label for="filterSearch">Cari jadwal</label>
+        <input
+          type="search"
+          id="filterSearch"
+          placeholder="Program, petugas, tempat..."
+        >
+      </div>
+
+      <button id="applyFilters" type="button">
+        Terapkan
+      </button>
+
+    </div>
+  `;
+}
+
+async function getScheduleData() {
+  // Ambil jadwal yang masih berstatus valid
+  const { data, error } = await client
+    .from('schedules')
+    .select(`
+      id,
+      activity_date,
+      program_id,
+      staff_id,
+      place_id,
+      notes,
+      status
+    `)
+    .eq('status', 'valid')
+    .order('activity_date', { ascending: false })
+    .limit(2000);
+
+  if (error) throw error;
+
+  // Ambil SEMUA data master, termasuk yang sudah nonaktif.
+  // Tujuannya agar nama pada jadwal lama tetap bisa ditampilkan.
+  const [programResult, staffResult, placeResult] =
+    await Promise.all([
+      client
+        .from('programs')
+        .select('id, program_name'),
+
+      client
+        .from('staff')
+        .select('id, full_name'),
+
+      client
+        .from('places')
+        .select('id, place_name')
+    ]);
+
+  if (programResult.error) throw programResult.error;
+  if (staffResult.error) throw staffResult.error;
+  if (placeResult.error) throw placeResult.error;
+
+  const programMap = Object.fromEntries(
+    (programResult.data || []).map(item => [
+      item.id,
+      item.program_name
+    ])
+  );
+
+  const staffMap = Object.fromEntries(
+    (staffResult.data || []).map(item => [
+      item.id,
+      item.full_name
+    ])
+  );
+
+  const placeMap = Object.fromEntries(
+    (placeResult.data || []).map(item => [
+      item.id,
+      item.place_name
+    ])
+  );
+
+  // Gabungkan jadwal dengan nama master berdasarkan ID.
+  return (data || []).map(item => ({
+    ...item,
+    program_name:
+      programMap[item.program_id] || 'Program tidak ditemukan',
+    staff_name:
+      staffMap[item.staff_id] || 'Petugas tidak ditemukan',
+    place_name:
+      placeMap[item.place_id] || 'Tempat tidak ditemukan'
+  }));
+}
+
+async function renderHome(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat jadwal...</div>';try{await loadMasters();allSchedules=await getScheduleData();const now=new Date();const month=String(now.getMonth()+1).padStart(2,'0');const prefix=now.getFullYear()+'-'+month;const thisMonth=allSchedules.filter(x=>x.activity_date.startsWith(prefix)).length;const staffCount=masterCache.staff.length;const programCount=masterCache.programs.length;c.innerHTML=`<div class="welcome-row"><div><h3>Selamat datang, ${esc(currentProfile?.full_name||'Pengguna')} 👋</h3><p>Kelola jadwal kegiatan Puskesmas dalam satu tempat.</p></div><button type="button" id="quickAdd">＋ Input Jadwal</button></div><div class="stats"><div class="stat"><div><div class="stat-top">Total jadwal valid</div><strong>${allSchedules.length}</strong></div><span class="stat-icon">▤</span></div><div class="stat"><div><div class="stat-top">Jadwal bulan ini</div><strong>${thisMonth}</strong></div><span class="stat-icon">▦</span></div><div class="stat"><div><div class="stat-top">Petugas aktif</div><strong>${staffCount}</strong></div><span class="stat-icon">♙</span></div></div><section class="panel"><div class="panel-head"><h3>Daftar Jadwal Kegiatan</h3><span class="badge">${programCount} program aktif</span></div>${monthYearFilters()}<div id="homeTable"></div><div class="pagination" id="homePagination"></div></section><div class="page-foot">Sistem Jadwal UPTD Puskesmas Geyer 2</div>`;$('quickAdd').addEventListener('click',()=>setPage('input'));$('applyFilters').addEventListener('click',()=>{currentPageNumber=1;drawHomeTable()});['filterMonth','filterYear'].forEach(id=>$(id).addEventListener('change',()=>{currentPageNumber=1;drawHomeTable()}));$('filterSearch').addEventListener('input',()=>{currentPageNumber=1;drawHomeTable()});drawHomeTable()}catch(e){c.innerHTML=`<div class="panel"><h3>Jadwal belum dapat dimuat</h3><p class="muted">Periksa izin baca tabel schedules dan tabel data master di Supabase.</p><div class="notice warn">Detail: ${esc(e.message||'Kesalahan tidak diketahui')}</div><button id="retryHome">Coba lagi</button></div>`;$('retryHome').addEventListener('click',renderHome)}}
+
+function openScheduleEditor(item) {
+  const c = $('dashboardContent');
+
+  const options = (items, selectedId, label, value = 'id') =>
+    items.map(x => `
+      <option value="${esc(x[value])}"
+        ${x[value] === selectedId ? 'selected' : ''}>
+        ${esc(label(x))}
+      </option>
+    `).join('');
+
+  c.insertAdjacentHTML('afterbegin', `
+    <section class="panel" id="scheduleEditor">
+      <h3>Edit Jadwal Kegiatan</h3>
+      <form id="editScheduleForm">
+        <label for="editDate">Tanggal kegiatan</label>
+        <input id="editDate" type="date"
+          value="${esc(item.activity_date)}" required>
+
+        <label for="editProgram">Program</label>
+        <select id="editProgram" required>
+          ${options(masterCache.programs, item.program_id, x => x.program_name)}
+        </select>
+
+        <label for="editStaff">Petugas</label>
+        <select id="editStaff" required>
+          ${options(masterCache.staff, item.staff_id, x => x.full_name)}
+        </select>
+
+        <label for="editPlace">Tempat</label>
+        <select id="editPlace" required>
+          ${options(masterCache.places, item.place_id, x => x.place_name)}
+        </select>
+
+        <label for="editNotes">Catatan</label>
+        <textarea id="editNotes" maxlength="500">${esc(item.notes || '')}</textarea>
+
+        <div id="editScheduleMessage" role="status"></div>
+
+        <div class="form-actions">
+          <button type="button" class="secondary" id="cancelScheduleEdit">Batal</button>
+          <button type="submit" id="updateScheduleButton">Simpan Perubahan</button>
+        </div>
+      </form>
+    </section>
+  `);
+
+  $('cancelScheduleEdit').addEventListener('click', () => {
+    $('scheduleEditor').remove();
+  });
+
+  $('editScheduleForm').addEventListener('submit', async e => {
+    e.preventDefault();
+
+    const btn = $('updateScheduleButton');
+    const m = $('editScheduleMessage');
+    const date = $('editDate').value;
+
+    if (new Date(date + 'T12:00:00').getDay() === 0) {
+      m.textContent = 'Jadwal tidak dapat dibuat pada hari Minggu.';
+      return;
+    }
+
+    if (!confirm('Simpan perubahan jadwal ini?')) return;
+
+    btn.disabled = true;
+    m.textContent = 'Menyimpan perubahan...';
+
+    const { error } = await client
+      .from('schedules')
+      .update({
+        activity_date: date,
+        program_id: $('editProgram').value,
+        staff_id: $('editStaff').value,
+        place_id: $('editPlace').value,
+        notes: $('editNotes').value.trim() || null
+      })
+      .eq('id', item.id);
+
+    if (error) {
+      m.textContent = 'Perubahan gagal disimpan: ' + error.message;
+      btn.disabled = false;
+      return;
+    }
+
+    await renderHome();
+    msg('Jadwal berhasil diperbarui.');
+  });
+}
+
+
+function drawHomeTable() {
+  const month = $('filterMonth')?.value || 'all';
+  const year = $('filterYear')?.value || 'all';
+
+  const dateStart = $('filterDateStart')?.value || '';
+  const dateEnd = $('filterDateEnd')?.value || '';
+
+  const q = ($('filterSearch')?.value || '')
+    .trim()
+    .toLowerCase();
+
+  // Validasi rentang tanggal.
+  if (dateStart && dateEnd && dateStart > dateEnd) {
+    $('homeTable').innerHTML = `
+      <div class="notice warn">
+        Tanggal mulai tidak boleh melebihi tanggal akhir.
+      </div>
+    `;
+    $('homePagination').innerHTML = '';
+    return;
+  }
+
+  const useDateRange = Boolean(dateStart || dateEnd);
+
+  const rows = allSchedules.filter(x => {
+    const date = x.activity_date;
+
+    // Jika rentang tanggal diisi, gunakan rentang tersebut.
+    // Jika kosong, gunakan filter bulan dan tahun.
+    const matchDate = useDateRange
+      ? (
+          (!dateStart || date >= dateStart) &&
+          (!dateEnd || date <= dateEnd)
+        )
+      : (
+          (month === 'all' ||
+            Number(date.slice(5, 7)) === Number(month)) &&
+          (year === 'all' ||
+            date.startsWith(year))
+        );
+
+    const matchSearch = [
+      x.program_name,
+      x.staff_name,
+      x.place_name,
+      x.notes
+    ].some(v =>
+      String(v || '').toLowerCase().includes(q)
+    );
+
+    return matchDate && matchSearch;
+  });
+
+  const isAdmin = currentProfile?.role === 'admin';
+
+  const pages = Math.max(
+    1,
+    Math.ceil(rows.length / pageSize)
+  );
+
+  currentPageNumber = Math.min(currentPageNumber, pages);
+
+  const start = (currentPageNumber - 1) * pageSize;
+  const pageRows = rows.slice(start, start + pageSize);
+
+  $('homeTable').innerHTML = pageRows.length
+    ? `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Tanggal</th>
+              <th>Program</th>
+              <th>Petugas</th>
+              <th>Tempat</th>
+              <th>Catatan</th>
+              <th>Status</th>
+              ${isAdmin ? '<th>Aksi</th>' : ''}
+            </tr>
+          </thead>
+
+          <tbody>
+            ${pageRows.map(x => `
+              <tr>
+                <td>${esc(x.activity_date)}</td>
+                <td>${esc(x.program_name)}</td>
+                <td>${esc(x.staff_name)}</td>
+                <td>${esc(x.place_name)}</td>
+                <td>${esc(x.notes || '-')}</td>
+                <td><span class="badge">Valid</span></td>
+
+                ${isAdmin ? `
+                  <td>
+                    <div class="row-actions">
+                      <button type="button"
+                        class="small-btn"
+                        data-edit-schedule="${esc(x.id)}">
+                        Edit
+                      </button>
+
+                      <button type="button"
+                        class="small-btn danger-btn"
+                        data-delete-schedule="${esc(x.id)}">
+                        Hapus
+                      </button>
+                    </div>
+                  </td>
+                ` : ''}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `
+    : '<div class="empty">Tidak ada jadwal sesuai filter.</div>';
+
+  $('homePagination').innerHTML = `
+    <span>
+      Menampilkan ${rows.length ? start + 1 : 0}–${Math.min(
+        start + pageSize,
+        rows.length
+      )} dari ${rows.length} jadwal
+    </span>
+
+    <div class="pagination-actions">
+      <button id="prevPage"
+        ${currentPageNumber <= 1 ? 'disabled' : ''}>
+        Sebelumnya
+      </button>
+
+      <span style="padding:8px">
+        Halaman ${currentPageNumber}/${pages}
+      </span>
+
+      <button id="nextPage"
+        ${currentPageNumber >= pages ? 'disabled' : ''}>
+        Berikutnya
+      </button>
+    </div>
+  `;
+
+  $('prevPage').addEventListener('click', () => {
+    currentPageNumber--;
+    drawHomeTable();
+  });
+
+  $('nextPage').addEventListener('click', () => {
+    currentPageNumber++;
+    drawHomeTable();
+  });
+
+  document.querySelectorAll('[data-edit-schedule]')
+    .forEach(btn => {
+      btn.addEventListener('click', () => {
+        const item = allSchedules.find(
+          x => x.id === btn.dataset.editSchedule
+        );
+
+        if (item) openScheduleEditor(item);
+      });
+    });
+
+  document.querySelectorAll('[data-delete-schedule]')
+    .forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.deleteSchedule;
+        const item = allSchedules.find(x => x.id === id);
+
+        if (!item) return;
+
+        if (!confirm(
+          `Hapus jadwal ${item.activity_date} untuk ${item.staff_name}?\nTindakan ini tidak dapat dibatalkan.`
+        )) return;
+
+        btn.disabled = true;
+
+        const { error } = await client
+          .from('schedules')
+          .delete()
+          .eq('id', id);
+
+        if (error) {
+          alert('Jadwal gagal dihapus: ' + error.message);
+          btn.disabled = false;
+          return;
+        }
+
+        await renderHome();
+        msg('Jadwal berhasil dihapus.');
+      });
+    });
+}
+
+async function renderInput(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat pilihan formulir...</div>';try{await loadMasters();const isPetugas=currentProfile?.role==='petugas';if(isPetugas&&!currentProfile.staff_id){c.innerHTML='<div class="panel"><h3>Akun belum terhubung ke petugas</h3><p class="muted">Hubungi administrator untuk mengisi staff_id pada profil akun.</p></div>';return}const opt=(arr,label,value,extra=()=> '')=>arr.map(x=>`<option value="${esc(x[value])}">${esc(label(x))}${extra(x)}</option>`).join('');c.innerHTML=`<div class="welcome-row"><div><h3>Input Jadwal Kegiatan</h3><p>Lengkapi informasi kegiatan. Sistem akan memeriksa kebijakan kalender dan bentrok petugas.</p></div></div><section class="panel"><form id="scheduleForm"><div class="form-grid"><div><label for="activityDate">Tanggal kegiatan *</label><input id="activityDate" type="date" required></div><div><label for="programId">Program kegiatan *</label><select id="programId" required><option value="">Pilih program</option>${opt(masterCache.programs,x=>x.program_name,'id',x=>x.program_code?' — '+x.program_code:'')}</select></div><div><label for="staffId">Nama petugas *</label><select id="staffId" required ${isPetugas?'disabled':''}><option value="">Pilih petugas</option>${opt(masterCache.staff.filter(x=>!isPetugas||x.id===currentProfile.staff_id),x=>x.full_name,'id',x=>x.employee_code?' — '+x.employee_code:'')}</select></div><div><label for="placeId">Tempat kegiatan *</label><select id="placeId" required><option value="">Pilih tempat</option>${opt(masterCache.places,x=>x.place_name,'id')}</select></div><div class="full"><label for="scheduleNotes">Catatan (opsional)</label><textarea id="scheduleNotes" rows="3" maxlength="500" placeholder="Keterangan tambahan"></textarea></div></div><div class="notice warn">Hari Minggu dan tanggal dengan kebijakan blokir tidak dapat dipilih. Hari Sabtu atau tanggal peringatan memerlukan konfirmasi.</div><div id="scheduleFormMessage" role="status" aria-live="polite"></div><div class="form-actions"><button type="button" class="secondary" id="cancelInput">Batal</button><button type="submit" id="saveScheduleButton">Simpan Jadwal</button></div></form></section>`;if(isPetugas)$('staffId').value=currentProfile.staff_id;$('cancelInput').addEventListener('click',()=>setPage('home'));$('scheduleForm').addEventListener('submit',saveSchedule)}catch(e){c.innerHTML=`<div class="panel"><h3>Formulir belum dapat dimuat</h3><div class="notice warn">${esc(e.message||'Periksa izin data master.')}</div></div>`}}
+async function saveSchedule(e){e.preventDefault();const btn=$('saveScheduleButton'),m=$('scheduleFormMessage');m.style.color='#b42318';m.textContent='';const date=$('activityDate').value,program=$('programId').value,staff=$('staffId').value,place=$('placeId').value,notes=$('scheduleNotes').value.trim();if(!date||!program||!staff||!place){m.textContent='Tanggal, program, petugas, dan tempat wajib diisi.';return}const dow=new Date(date+'T12:00:00').getDay();if(dow===0){m.textContent='Jadwal tidak dapat dibuat pada hari Minggu.';return}try{const {data:day,error:ce}=await client.from('calendar_days').select('day_description,day_type,schedule_policy').eq('calendar_date',date).maybeSingle();if(ce)throw ce;if(!day){m.textContent='Tanggal belum tersedia di kalender. Hubungi administrator.';return}if(day.schedule_policy==='block'){m.textContent='Tanggal diblokir: '+(day.day_description||date);return}if(dow===6||day.schedule_policy==='warning'){if(!confirm('Perhatian: tanggal ini memiliki kebijakan peringatan'+(day.day_description?' ('+day.day_description+')':'')+'. Tetap simpan jadwal?'))return}btn.disabled=true;btn.textContent='Menyimpan...';const {error}=await client.from('schedules').insert({activity_date:date,program_id:program,staff_id:staff,place_id:place,notes:notes||null,status:'valid'});if(error){let t=error.message||'Kesalahan';if(/duplicate key|schedules_staff_date_unique|unique constraint/i.test(t))t='Petugas tersebut sudah memiliki jadwal pada tanggal itu.';if(/row-level security|permission denied/i.test(t))t='Akun Anda tidak memiliki izin menyimpan jadwal ini.';m.textContent='Jadwal belum tersimpan: '+t;return}m.style.color='#087f5b';m.textContent='Jadwal berhasil disimpan.';setTimeout(()=>setPage('home'),700)}catch(err){m.textContent='Jadwal belum tersimpan: '+(err.message||'Periksa koneksi.')}finally{btn.disabled=false;btn.textContent='Simpan Jadwal'}}
+async function renderMaster(type, query='', page=1){
+  masterType=type;
+  const c=$('dashboardContent');
+  c.innerHTML='<div class="loading">Memuat data master...</div>';
+  try{
+    await loadMasters();
+    const cfg={
+      programs:{title:'Program',singular:'Program',headers:['Kode Program','Nama Program'],search:['program_code','program_name'],fields:[['program_code','Kode Program','text'],['program_name','Nama Program','text']],values:x=>[x.program_code,x.program_name]},
+      staff:{title:'Staff / Petugas',singular:'Petugas',headers:['Kode Petugas','Nama Petugas'],search:['employee_code','full_name'],fields:[['employee_code','Kode Petugas / NIP','text'],['full_name','Nama Petugas','text']],values:x=>[x.employee_code,x.full_name]},
+      places:{title:'Tempat',singular:'Tempat',headers:['Nama Tempat'],search:['place_name'],fields:[['place_name','Nama Tempat','text']],values:x=>[x.place_name]}
+    }[type];
+    if(!cfg) throw new Error('Jenis data master tidak dikenal.');
+    const all=masterCache[type]||[];
+    const q=String(query||'').trim().toLowerCase();
+    const filtered=all.filter(x=>cfg.search.some(k=>String(x[k]||'').toLowerCase().includes(q)));
+    const size=10, pages=Math.max(1,Math.ceil(filtered.length/size));
+    page=Math.max(1,Math.min(Number(page)||1,pages));
+    const rows=filtered.slice((page-1)*size,page*size);
+    const isAdmin=currentProfile?.role==='admin';
+    const actions=isAdmin?'<th>Aksi</th>':'';
+    c.innerHTML=`<div class="welcome-row"><div><h3>${cfg.title}</h3><p>Daftar ${cfg.title.toLowerCase()} aktif yang tersimpan di Supabase.</p></div><span class="badge">${filtered.length} dari ${all.length} data</span></div>
+    <section class="panel"><div class="panel-head"><h3>Data ${cfg.title}</h3>${isAdmin?'<button type="button" id="addMasterBtn">＋ Tambah '+cfg.singular+'</button>':''}</div>
+    <div class="master-toolbar"><div><label for="masterSearch">Cari ${cfg.title.toLowerCase()}</label><input id="masterSearch" type="search" value="${esc(query)}" placeholder="Ketik kode atau nama..."></div><button type="button" class="secondary" id="clearMasterSearch">Reset</button></div>
+    <div id="masterEditor"></div>
+    <div class="table-wrap"><table class="data-table"><thead><tr>${cfg.headers.map(h=>`<th>${h}</th>`).join('')}${actions}</tr></thead><tbody>${rows.map(x=>`<tr>${cfg.values(x).map(v=>`<td>${esc(v||'-')}</td>`).join('')}${isAdmin?`<td><div class="row-actions"><button type="button" class="small-btn" data-edit-master="${esc(x.id)}">Edit</button><button type="button" class="small-btn danger-btn" data-deactivate-master="${esc(x.id)}">Nonaktifkan</button></div></td>`:''}</tr>`).join('')||`<tr><td colspan="${cfg.headers.length+(isAdmin?1:0)}" class="empty-cell">Tidak ada data yang cocok.</td></tr>`}</tbody></table></div>
+    <div class="pagination"><span>Menampilkan ${filtered.length?((page-1)*size+1):0}–${Math.min(page*size,filtered.length)} dari ${filtered.length} data</span><div class="pagination-actions"><button type="button" class="secondary" id="masterPrev" ${page<=1?'disabled':''}>Sebelumnya</button><span class="page-count">Halaman ${page}/${pages}</span><button type="button" class="secondary" id="masterNext" ${page>=pages?'disabled':''}>Berikutnya</button></div></div>
+    <div class="notice">Penonaktifan menyembunyikan data dari pilihan input baru, tetapi tidak menghapus riwayat jadwal yang sudah tersimpan.</div></section>`;
+    $('masterSearch').addEventListener('input',e=>renderMaster(type,e.target.value,1));
+    $('clearMasterSearch').addEventListener('click',()=>renderMaster(type,'',1));
+    $('masterPrev').addEventListener('click',()=>renderMaster(type,$('masterSearch').value,page-1));
+    $('masterNext').addEventListener('click',()=>renderMaster(type,$('masterSearch').value,page+1));
+    if(isAdmin){
+      $('addMasterBtn').addEventListener('click',()=>showMasterEditor(type,null));
+      c.querySelectorAll('[data-edit-master]').forEach(b=>b.addEventListener('click',()=>{const item=all.find(x=>x.id===b.dataset.editMaster);if(item)showMasterEditor(type,item)}));
+      c.querySelectorAll('[data-deactivate-master]').forEach(b=>b.addEventListener('click',async()=>{
+        const item=all.find(x=>x.id===b.dataset.deactivateMaster);if(!item)return;
+        const label=cfg.values(item).filter(Boolean).join(' — ');
+        if(!confirm(`Nonaktifkan data "${label}"? Data tidak dihapus dan jadwal lama tetap dipertahankan.`))return;
+        try{const {error}=await client.from(type).update({is_active:false}).eq('id',item.id);if(error)throw error;await loadMasters();await renderMaster(type,query,page);msg('Data berhasil dinonaktifkan.')}catch(err){alert('Gagal menonaktifkan data: '+(err.message||'Periksa izin database.'))}
+      }));
+    }
+  }catch(e){c.innerHTML=`<section class="panel"><h3>Data master gagal dimuat</h3><div class="notice warn">${esc(e.message||'Periksa izin akses tabel.')}</div></section>`}
+}
+function showMasterEditor(type,item){
+  const editor=$('masterEditor');
+  const cfg={programs:{title:'Program',fields:[['program_code','Kode Program'],['program_name','Nama Program']]},staff:{title:'Petugas',fields:[['employee_code','Kode Petugas / NIP'],['full_name','Nama Petugas']]},places:{title:'Tempat',fields:[['place_name','Nama Tempat']]}}[type];
+  if(!editor||!cfg)return;
+  editor.innerHTML=`<section class="master-editor"><div class="panel-head"><h3>${item?'Ubah':'Tambah'} ${cfg.title}</h3></div><form id="masterForm"><div class="form-grid">${cfg.fields.map(([key,label])=>`<div><label for="mf_${key}">${label} *</label><input id="mf_${key}" name="${key}" required maxlength="160" value="${esc(item?.[key]||'')}" autocomplete="off"></div>`).join('')}</div><div id="masterFormMessage" role="status" aria-live="polite"></div><div class="form-actions"><button type="button" class="secondary" id="cancelMasterEdit">Batal</button><button type="submit" id="saveMasterBtn">${item?'Simpan Perubahan':'Simpan Data'}</button></div></form></section>`;
+  $('cancelMasterEdit').addEventListener('click',()=>{editor.innerHTML=''});
+  $('masterForm').addEventListener('submit',async e=>{
+    e.preventDefault();const btn=$('saveMasterBtn'),m=$('masterFormMessage');btn.disabled=true;btn.textContent='Menyimpan...';m.textContent='';m.style.color='#b42318';
+    const payload={};for(const [key] of cfg.fields)payload[key]=$(('mf_'+key)).value.trim();payload.is_active=true;
+    if(Object.values(payload).some(v=>typeof v==='string'&&!v)){m.textContent='Semua kolom wajib diisi.';btn.disabled=false;btn.textContent=item?'Simpan Perubahan':'Simpan Data';return}
+    try{let result;if(item)result=await client.from(type).update(payload).eq('id',item.id);else result=await client.from(type).insert(payload);if(result.error)throw result.error;await loadMasters();await renderMaster(type,'',1);msg(item?'Perubahan data berhasil disimpan.':'Data baru berhasil ditambahkan.')}catch(err){let detail=err.message||'Periksa koneksi dan izin database.';if(/duplicate key|unique constraint/i.test(detail))detail='Kode atau nama tersebut sudah digunakan.';m.textContent='Data belum tersimpan: '+detail;btn.disabled=false;btn.textContent=item?'Simpan Perubahan':'Simpan Data'}
+  });
+}
+async function renderCalendar(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat kalender...</div>';const year=new Date().getFullYear();try{const {data,error}=await client.from('calendar_days').select('calendar_date,day_description,day_type,schedule_policy,verification_status').gte('calendar_date',year+'-01-01').lt('calendar_date',(year+1)+'-01-01').order('calendar_date').limit(400);if(error)throw error;c.innerHTML=`<div class="welcome-row"><div><h3>Kalender ${year}</h3><p>Jadwal mengikuti kebijakan tanggal yang tersimpan di database.</p></div></div><section class="panel"><div class="table-wrap"><table class="data-table"><thead><tr><th>Tanggal</th><th>Hari</th><th>Keterangan</th><th>Jenis hari</th><th>Kebijakan</th><th>Verifikasi</th></tr></thead><tbody>${(data||[]).map(d=>`<tr><td>${esc(d.calendar_date)}</td><td>${new Date(d.calendar_date+'T12:00:00').toLocaleDateString('id-ID',{weekday:'long',timeZone:'Asia/Jakarta'})}</td><td>${esc(d.day_description||'-')}</td><td>${esc(d.day_type)}</td><td><span class="badge ${d.schedule_policy==='block'?'block':d.schedule_policy==='warning'?'warning':''}">${esc(d.schedule_policy)}</span></td><td>${esc(d.verification_status)}</td></tr>`).join('')||'<tr><td colspan="6">Belum ada data kalender.</td></tr>'}</tbody></table></div></section>`}catch(e){c.innerHTML=`<section class="panel"><h3>Kalender gagal dimuat</h3><div class="notice warn">${esc(e.message||'Periksa izin tabel calendar_days.')}</div></section>`}}
+function renderSettings(){const c=$('dashboardContent');c.innerHTML=`<div class="welcome-row"><div><h3>Pengaturan</h3><p>Pengaturan akun yang dapat dilakukan dengan aman dari aplikasi.</p></div></div><div class="settings-grid"><section class="setting-card"><h3>Ubah password</h3><p>Gunakan password baru yang kuat dan tidak dipakai di layanan lain.</p><form id="passwordForm"><label for="newPassword">Password baru</label><input id="newPassword" type="password" minlength="8" autocomplete="new-password" required placeholder="Minimal 8 karakter"><label for="confirmPassword">Ulangi password</label><input id="confirmPassword" type="password" minlength="8" autocomplete="new-password" required placeholder="Ulangi password baru"><button type="submit">Ubah Password</button><div id="passwordMessage" role="status"></div></form></section><section class="setting-card"><h3>Profil dan role akses</h3><p>Nama: <strong>${esc(currentProfile?.full_name||'-')}</strong><br>Role: <strong>${esc(currentProfile?.role||'-')}</strong><br>Email: <strong>${esc(currentUser?.email||'-')}</strong></p><div class="notice warn">Perubahan role dan pengelolaan akun pengguna belum dibuka dari antarmuka ini. Role harus diubah melalui proses admin yang tervalidasi di Supabase, bukan langsung dari browser.</div></section><section class="setting-card"><h3>Aturan jadwal</h3><p>Minggu dan tanggal berkebijakan <em>block</em> ditolak. Sabtu atau tanggal berkebijakan <em>warning</em> memerlukan konfirmasi.</p><button type="button" id="settingsCalendar">Lihat Kalender</button></section><section class="setting-card"><h3>Sesi login</h3><p>Jika menggunakan komputer bersama, keluar setelah selesai mengelola jadwal.</p><button type="button" class="secondary" id="settingsLogout">Keluar dari akun</button></section></div>`;$('passwordForm').addEventListener('submit',async e=>{e.preventDefault();const a=$('newPassword').value,b=$('confirmPassword').value,m=$('passwordMessage');m.style.color='#b42318';if(a.length<8){m.textContent='Password minimal 8 karakter.';return}if(a!==b){m.textContent='Password baru dan konfirmasi tidak sama.';return}const {error}=await client.auth.updateUser({password:a});if(error){m.textContent='Password gagal diubah: '+error.message;return}m.style.color='#087f5b';m.textContent='Password berhasil diubah.';$('passwordForm').reset()});$('settingsCalendar').addEventListener('click',()=>setPage('calendar'));$('settingsLogout').addEventListener('click',()=>$('logoutButton').click())}
+async function renderAccounts() {
+  const c = $('dashboardContent');
+
+  if (currentProfile?.role !== 'admin') {
+    c.innerHTML = '<section class="panel">Akses khusus administrator.</section>';
+    return;
+  }
+
+  c.innerHTML = '<div class="loading">Memuat akun...</div>';
+
+  try {
+    await loadMasters();
+
+    const result = await client.functions.invoke('admin-manage-user', {
+      body: { action: 'list' }
+    });
+
+    if (result.error) {
+      throw new Error(
+        result.data?.error || result.error.message ||
+        'Gagal menghubungi fungsi pengelolaan akun.'
+      );
+    }
+
+    if (!result.data?.success) {
+      throw new Error(result.data?.error || 'Gagal memuat akun.');
+    }
+
+    const accounts = result.data.accounts || [];
+
+    c.innerHTML = `
+      <section class="panel">
+        <div class="panel-head">
+          <h3>Daftar Akun</h3>
+          <button type="button" id="showCreateAccount">
+            + Tambah Akun
+          </button>
+        </div>
+
+        <div id="accountMessage" role="status" aria-live="polite"></div>
+        <div id="accountEditor"></div>
+
+        <div class="master-toolbar">
+          <div>
+            <label for="accountSearch">Cari akun</label>
+            <input id="accountSearch" type="search"
+              placeholder="Nama, email, role, atau petugas">
+          </div>
+        </div>
+
+        <div id="accountTable"></div>
+      </section>
+    `;
+
+    const editor = $('accountEditor');
+    const message = $('accountMessage');
+    const table = $('accountTable');
+
+    function drawAccounts() {
+      const q = $('accountSearch').value.trim().toLowerCase();
+
+      const rows = accounts.filter(a =>
+        [
+          a.full_name,
+          a.email,
+          a.role,
+          a.staff_name
+        ].some(v => String(v || '').toLowerCase().includes(q))
+      );
+
+      table.innerHTML = rows.length
+        ? `<div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Nama</th>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Petugas</th>
+                  <th>Status</th>
+                  <th>Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map(a => `
+                  <tr>
+                    <td>${esc(a.full_name || '-')}</td>
+                    <td>${esc(a.email || '-')}</td>
+                    <td>${esc(a.role || '-')}</td>
+                    <td>${esc(a.staff_name || '-')}</td>
+                    <td><span class="badge ${a.is_active ? '' : 'danger-btn'}">${a.is_active ? 'Aktif' : 'Nonaktif'}</span></td>
+                    <td>
+                      <div class="row-actions">
+                        ${a.id === currentUser.id
+                          ? '<span class="muted">Akun Anda</span>'
+                          : `<button type="button"
+                              class="small-btn ${a.is_active ? 'danger-btn' : ''}"
+                              data-account-id="${esc(a.id)}"
+                              data-active="${a.is_active ? 'true' : 'false'}">
+                              ${a.is_active ? 'Nonaktifkan' : 'Aktifkan'}
+                            </button>`
+                        }
+                        ${['operator', 'petugas'].includes(a.role)
+                          ? `<button type="button" class="small-btn"
+                              data-reset-account-id="${esc(a.id)}">Reset Password</button>`
+                          : ''}
+                      </div>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>`
+        : '<div class="empty">Tidak ada akun yang cocok.</div>';
+
+      table.querySelectorAll('[data-account-id]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.dataset.accountId;
+          const nextActive = btn.dataset.active !== 'true';
+          const account = accounts.find(a => a.id === id);
+
+          if (!account) return;
+
+          const actionText = nextActive ? 'mengaktifkan' : 'menonaktifkan';
+
+          if (!confirm(
+            `Yakin ingin ${actionText} akun ${account.full_name}?`
+          )) return;
+
+          btn.disabled = true;
+          message.textContent = 'Memproses perubahan status...';
+
+          try {
+            const response = await client.functions.invoke(
+              'admin-manage-user',
+              {
+                body: {
+                  action: 'set_active',
+                  user_id: id,
+                  is_active: nextActive
+                }
+              }
+            );
+
+            if (response.error) {
+              throw new Error(
+                response.data?.error || response.error.message
+              );
+            }
+
+            if (!response.data?.success) {
+              throw new Error(
+                response.data?.error || 'Status akun gagal diubah.'
+              );
+            }
+
+            await renderAccounts();
+            msg('Status akun berhasil diperbarui.');
+            return;
+          } catch (err) {
+            message.style.color = '#b42318';
+            message.textContent =
+              'Gagal mengubah status: ' + (err.message || 'Kesalahan');
+            btn.disabled = false;
+          }
+        });
+      });
+
+      table.querySelectorAll('[data-reset-account-id]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const account = accounts.find(a => a.id === btn.dataset.resetAccountId);
+          if (account) showResetPasswordForm(account, editor, message);
+        });
+      });
+    }
+
+function showResetPasswordForm(account, editor, message) {
+  editor.innerHTML = `
+    <section class="master-editor">
+      <h3>Reset Password Akun</h3>
+      <p>
+        Akun: <strong>${esc(account.full_name)}</strong><br>
+        Email: ${esc(account.email || '-')}<br>
+        Role: ${esc(account.role)}
+      </p>
+
+      <form id="resetPasswordForm">
+        <div class="form-grid">
+          <div>
+            <label for="resetPassword">Password baru *</label>
+            <input
+              id="resetPassword"
+              type="password"
+              minlength="12"
+              maxlength="128"
+              autocomplete="new-password"
+              required
+            >
+            <small>Minimal 12 karakter.</small>
+          </div>
+
+          <div>
+            <label for="resetPasswordConfirm">
+              Konfirmasi password baru *
+            </label>
+            <input
+              id="resetPasswordConfirm"
+              type="password"
+              minlength="12"
+              maxlength="128"
+              autocomplete="new-password"
+              required
+            >
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="secondary"
+            id="cancelResetPassword">Batal</button>
+          <button type="submit" id="submitResetPassword">
+            Simpan Password Baru
+          </button>
+        </div>
+      </form>
+    </section>
+  `;
+
+  $('cancelResetPassword').addEventListener('click', () => {
+    editor.innerHTML = '';
+  });
+
+  $('resetPasswordForm').addEventListener('submit', async e => {
+    e.preventDefault();
+
+    const password = $('resetPassword').value;
+    const confirmation = $('resetPasswordConfirm').value;
+    const button = $('submitResetPassword');
+
+    if (password.length < 12) {
+      message.style.color = '#b42318';
+      message.textContent = 'Password minimal 12 karakter.';
+      return;
+    }
+
+    if (password !== confirmation) {
+      message.style.color = '#b42318';
+      message.textContent =
+        'Konfirmasi password tidak sama.';
+      return;
+    }
+
+    if (!confirm(
+      `Reset password akun ${account.full_name}?`
+    )) return;
+
+    button.disabled = true;
+    button.textContent = 'Memproses...';
+    message.textContent = '';
+
+    try {
+      const response = await client.functions.invoke(
+        'admin-manage-user',
+        {
+          body: {
+            action: 'reset_password',
+            user_id: account.id,
+            password
+          }
+        }
+      );
+
+      if (response.error) {
+        throw new Error(
+          response.data?.error || response.error.message
+        );
+      }
+
+      if (!response.data?.success) {
+        throw new Error(
+          response.data?.error || 'Reset password gagal.'
+        );
+      }
+
+      editor.innerHTML = '';
+      message.style.color = '#087f5b';
+      message.textContent =
+        `Password akun ${account.full_name} berhasil direset.`;
+
+    } catch (err) {
+      message.style.color = '#b42318';
+      message.textContent =
+        'Reset password gagal: ' +
+        (err.message || 'Kesalahan tidak diketahui');
+
+      button.disabled = false;
+      button.textContent = 'Simpan Password Baru';
+    }
+  });
+}
+    function showCreateForm() {
+      editor.innerHTML = `
+        <section class="master-editor">
+          <h3>Tambah Akun Baru</h3>
+          <form id="createAccountForm">
+            <div class="form-grid">
+              <div>
+                <label for="accountName">Nama lengkap *</label>
+                <input id="accountName" required maxlength="160">
+              </div>
+              <div>
+                <label for="accountEmail">Email login *</label>
+                <input id="accountEmail" type="email" required
+                  autocomplete="off">
+              </div>
+              <div>
+                <label for="accountPassword">Password awal *</label>
+                <input id="accountPassword" type="password"
+                  minlength="12" required autocomplete="new-password">
+                <small>Minimal 12 karakter.</small>
+              </div>
+              <div>
+                <label for="accountRole">Role *</label>
+                <select id="accountRole" required>
+                  <option value="operator">Operator</option>
+                  <option value="petugas">Petugas</option>
+                </select>
+              </div>
+              <div id="staffSelectWrap" style="display:none">
+                <label for="accountStaff">Hubungkan ke petugas *</label>
+                <select id="accountStaff">
+                  <option value="">Pilih petugas</option>
+                  ${masterCache.staff.map(s => `
+                    <option value="${esc(s.id)}">
+                      ${esc(s.full_name)}${s.employee_code
+                        ? ' — ' + esc(s.employee_code) : ''}
+                    </option>
+                  `).join('')}
+                </select>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button type="button" class="secondary" id="cancelCreateAccount">
+                Batal
+              </button>
+              <button type="submit" id="saveAccountButton">
+                Buat Akun
+              </button>
+            </div>
+          </form>
+        </section>
+      `;
+
+      const role = $('accountRole');
+      const staffWrap = $('staffSelectWrap');
+      const staffSelect = $('accountStaff');
+
+      function updateStaffField() {
+        const isPetugas = role.value === 'petugas';
+        staffWrap.style.display = isPetugas ? '' : 'none';
+        staffSelect.required = isPetugas;
+        if (!isPetugas) staffSelect.value = '';
+      }
+
+      role.addEventListener('change', updateStaffField);
+      updateStaffField();
+
+      $('cancelCreateAccount').addEventListener('click', () => {
+        editor.innerHTML = '';
+      });
+
+      $('createAccountForm').addEventListener('submit', async e => {
+        e.preventDefault();
+
+        const btn = $('saveAccountButton');
+        const password = $('accountPassword').value;
+
+        if (password.length < 12) {
+          message.style.color = '#b42318';
+          message.textContent = 'Password minimal 12 karakter.';
+          return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Membuat akun...';
+        message.textContent = '';
+
+        try {
+          const response = await client.functions.invoke(
+            'admin-manage-user',
+            {
+              body: {
+                action: 'create',
+                full_name: $('accountName').value.trim(),
+                email: $('accountEmail').value.trim(),
+                password,
+                role: role.value,
+                staff_id: role.value === 'petugas'
+                  ? staffSelect.value : null
+              }
+            }
+          );
+
+          if (response.error) {
+            throw new Error(
+              response.data?.error || response.error.message
+            );
+          }
+
+          if (!response.data?.success) {
+            throw new Error(
+              response.data?.error || 'Akun gagal dibuat.'
+            );
+          }
+
+          await renderAccounts();
+          msg('Akun baru berhasil dibuat.');
+        } catch (err) {
+          message.style.color = '#b42318';
+          message.textContent =
+            'Akun belum dibuat: ' + (err.message || 'Kesalahan');
+          btn.disabled = false;
+          btn.textContent = 'Buat Akun';
+        }
+      });
+    }
+
+    $('accountSearch').addEventListener('input', drawAccounts);
+    $('showCreateAccount').addEventListener('click', showCreateForm);
+
+    drawAccounts();
+  } catch (err) {
+    c.innerHTML = `
+      <section class="panel">
+        <h3>Daftar akun gagal dimuat</h3>
+        <div class="notice warn">${esc(err.message || 'Kesalahan tidak diketahui')}</div>
+        <button type="button" id="retryAccounts">Coba Lagi</button>
+      </section>
+    `;
+
+    $('retryAccounts').addEventListener('click', renderAccounts);
+  }
+}
+
+function renderImport() {
+  const c = $('dashboardContent');
+
+  c.innerHTML = `
+    <div class="welcome-row">
+      <div>
+        <h3>Import Jadwal dari Excel</h3>
+        <p>Unggah file .xlsx untuk menambahkan banyak jadwal sekaligus.</p>
+      </div>
+    </div>
+
+    <section class="panel">
+      <div class="notice">
+        Format kolom: Tanggal, Nama Program, Nama Petugas,
+        Nama Tempat, Catatan. Nama harus sesuai dengan data master aktif.
+      </div>
+
+      <p>
+        <a href="template_import_jadwal_puskesmas.xlsx"
+           download="template_import_jadwal_puskesmas.xlsx">
+          Unduh Template Excel
+        </a>
+      </p>
+
+      <label for="importFile">Pilih file Excel (.xlsx)</label>
+      <input id="importFile" type="file"
+             accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+
+      <div class="form-actions">
+        <button type="button" id="checkImport">Periksa File</button>
+      </div>
+
+      <div id="importMessage" role="status" aria-live="polite"></div>
+      <div id="importPreview"></div>
+    </section>
+  `;
+
+  let preparedRows = [];
+
+  const message = (text, error = false) => {
+    const el = $('importMessage');
+    el.style.color = error ? '#b42318' : '#087f5b';
+    el.textContent = text;
+  };
+
+  const normalize = value =>
+    String(value ?? '').trim().toLocaleLowerCase('id-ID');
+
+  
+function parseImportDate(value) {
+  // Jika Excel memberikan objek Date, ambil tanggal lokal.
+  if (value instanceof Date && !isNaN(value)) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+  }
+
+  // Jika Excel memberikan angka serial tanggal.
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = XLSX.SSF.parse_date_code(value);
+
+    if (!date) return null;
+
+    const year = date.y;
+    const month = String(date.m).padStart(2, '0');
+    const day = String(date.d).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+  }
+
+  const s = String(value ?? '').trim();
+
+  // Format YYYY-MM-DD.
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) {
+    const d = new Date(+m[1], +m[2] - 1, +m[3]);
+
+    if (
+      d.getFullYear() === +m[1] &&
+      d.getMonth() === +m[2] - 1 &&
+      d.getDate() === +m[3]
+    ) {
+      return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    }
+  }
+
+  // Format DD/MM/YYYY.
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const d = new Date(+m[3], +m[2] - 1, +m[1]);
+
+    if (
+      d.getFullYear() === +m[3] &&
+      d.getMonth() === +m[2] - 1 &&
+      d.getDate() === +m[1]
+    ) {
+      return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    }
+  }
+
+  return null;
+}
+
+
+  $('checkImport').addEventListener('click', async () => {
+    preparedRows = [];
+    $('importPreview').innerHTML = '';
+
+    const file = $('importFile').files[0];
+
+    if (!file) {
+      message('Pilih file Excel terlebih dahulu.', true);
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      message('Gunakan file Excel berformat .xlsx.', true);
+      return;
+    }
+
+    if (typeof XLSX === 'undefined') {
+      message('Pustaka Excel belum termuat. Periksa koneksi internet dan script XLSX di index.html.', true);
+      return;
+    }
+
+    const btn = $('checkImport');
+    btn.disabled = true;
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, {
+        type: 'array',
+        cellDates: false
+        });
+
+      const sheet = workbook.Sheets['Jadwal'];
+
+      if (!sheet) {
+        throw new Error('Sheet bernama "Jadwal" tidak ditemukan.');
+      }
+
+      const data = XLSX.utils.sheet_to_json(sheet, {
+        defval: '',
+        raw: true
+      });
+
+      if (!data.length) {
+        throw new Error('Sheet Jadwal belum berisi data.');
+      }
+
+      const requiredHeaders = [
+        'Tanggal',
+        'Nama Program',
+        'Nama Petugas',
+        'Nama Tempat',
+        'Catatan'
+      ];
+
+      const actualHeaders = Object.keys(data[0]);
+
+      const missing = requiredHeaders.filter(
+        h => !actualHeaders.includes(h)
+      );
+
+      if (missing.length) {
+        throw new Error('Kolom tidak sesuai template. Kolom yang tidak ditemukan: ' + missing.join(', '));
+      }
+
+      await loadMasters();
+
+      const programs = new Map(
+        masterCache.programs.map(x => [normalize(x.program_name), x])
+      );
+
+      const staff = new Map(
+        masterCache.staff.map(x => [normalize(x.full_name), x])
+      );
+
+      const places = new Map(
+        masterCache.places.map(x => [normalize(x.place_name), x])
+      );
+
+      const errors = [];
+      const warnings = [];
+      const seen = new Set();
+
+      data.forEach((row, index) => {
+        const excelRow = index + 2;
+        const rawValues = requiredHeaders.map(h => String(row[h] ?? '').trim());
+
+        // Lewati baris kosong.
+        if (rawValues.every(v => !v)) return;
+
+        // Baris contoh template harus dihapus; dilewati agar tidak masuk jadwal.
+        if (rawValues.some(v => v.toUpperCase().startsWith('CONTOH:'))) {
+          return;
+        }
+
+        const date = parseImportDate(row['Tanggal']);
+        const program = programs.get(normalize(row['Nama Program']));
+        const person = staff.get(normalize(row['Nama Petugas']));
+        const place = places.get(normalize(row['Nama Tempat']));
+        const notes = String(row['Catatan'] ?? '').trim();
+
+        const rowErrors = [];
+
+        if (!date) rowErrors.push('Tanggal tidak valid');
+        if (!program) rowErrors.push('Nama program tidak ditemukan atau tidak aktif');
+        if (!person) rowErrors.push('Nama petugas tidak ditemukan atau tidak aktif');
+        if (!place) rowErrors.push('Nama tempat tidak ditemukan atau tidak aktif');
+        if (notes.length > 500) rowErrors.push('Catatan melebihi 500 karakter');
+
+        if (date && new Date(date + 'T12:00:00').getDay() === 0) {
+          rowErrors.push('Hari Minggu tidak diperbolehkan');
+        }
+
+        if (
+          currentProfile?.role === 'petugas' &&
+          person &&
+          person.id !== currentProfile.staff_id
+        ) {
+          rowErrors.push('Petugas hanya boleh mengimpor jadwal untuk dirinya sendiri');
+        }
+
+        if (date && person) {
+          const key = `${date}|${person.id}`;
+
+          if (seen.has(key)) {
+            rowErrors.push('Petugas yang sama muncul lebih dari sekali pada tanggal ini di file');
+          }
+
+          seen.add(key);
+        }
+
+        if (rowErrors.length) {
+          errors.push(`Baris ${excelRow}: ${rowErrors.join('; ')}`);
+          return;
+        }
+
+        preparedRows.push({
+          excelRow,
+          activity_date: date,
+          program_id: program.id,
+          staff_id: person.id,
+          place_id: place.id,
+          notes: notes || null,
+          status: 'valid'
+        });
+      });
+
+      if (!preparedRows.length) {
+        message(
+          'Tidak ada baris jadwal yang siap diimpor. Pastikan baris contoh sudah dihapus dan data terisi.',
+          true
+        );
+        $('importPreview').innerHTML = errors.length
+          ? `<div class="notice warn">${errors.map(esc).join('<br>')}</div>`
+          : '';
+        return;
+      }
+
+      // Periksa kalender dan jadwal yang sudah ada sebelum menyimpan.
+      const checkedRows = [];
+
+      for (const row of preparedRows) {
+        const { data: day, error: dayError } = await client
+          .from('calendar_days')
+          .select('day_description,schedule_policy')
+          .eq('calendar_date', row.activity_date)
+          .maybeSingle();
+
+        if (dayError) throw dayError;
+
+        if (!day) {
+          errors.push(`Baris ${row.excelRow}: tanggal tidak ditemukan di kalender`);
+          continue;
+        }
+
+        if (day.schedule_policy === 'block') {
+          errors.push(`Baris ${row.excelRow}: tanggal diblokir (${day.day_description || row.activity_date})`);
+          continue;
+        }
+
+        const { data: duplicate, error: duplicateError } = await client
+          .from('schedules')
+          .select('id')
+          .eq('activity_date', row.activity_date)
+          .eq('staff_id', row.staff_id)
+          .limit(1);
+
+        if (duplicateError) throw duplicateError;
+
+        if (duplicate?.length) {
+          errors.push(`Baris ${row.excelRow}: petugas sudah memiliki jadwal pada tanggal tersebut`);
+          continue;
+        }
+
+        const dow = new Date(row.activity_date + 'T12:00:00').getDay();
+
+        if (dow === 6 || day.schedule_policy === 'warning') {
+          warnings.push(
+            `Baris ${row.excelRow}: ${row.activity_date} memerlukan konfirmasi`
+          );
+        }
+
+        checkedRows.push(row);
+      }
+
+      preparedRows = checkedRows;
+
+      $('importPreview').innerHTML = `
+        <div class="notice">
+          <strong>Ringkasan pemeriksaan</strong><br>
+          Siap diimpor: ${preparedRows.length} baris<br>
+          Baris bermasalah: ${errors.length}<br>
+          Perlu konfirmasi tanggal: ${warnings.length}
+        </div>
+        ${errors.length
+          ? `<div class="notice warn"><strong>Perbaiki baris berikut:</strong><br>${errors.map(esc).join('<br>')}</div>`
+          : ''}
+        ${warnings.length
+          ? `<div class="notice warn">${warnings.map(esc).join('<br>')}</div>`
+          : ''}
+        <button type="button" id="executeImport" ${preparedRows.length ? '' : 'disabled'}>
+          Simpan ${preparedRows.length} Jadwal
+        </button>
+      `;
+
+      message('Pemeriksaan selesai. Periksa ringkasan sebelum menyimpan.');
+
+      $('executeImport').addEventListener('click', async () => {
+        if (!preparedRows.length) return;
+
+        if (errors.length) {
+          message('Ada baris bermasalah. Perbaiki file dan periksa ulang sebelum mengimpor.', true);
+          return;
+        }
+
+        if (warnings.length && !confirm(
+          'Ada jadwal pada hari Sabtu atau tanggal peringatan. Tetap lanjutkan impor?'
+        )) return;
+
+        if (!confirm(`Simpan ${preparedRows.length} jadwal ke aplikasi?`)) return;
+
+        const saveBtn = $('executeImport');
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Menyimpan...';
+
+        let success = 0;
+        const failures = [];
+
+        for (const row of preparedRows) {
+          const { excelRow, ...payload } = row;
+
+          const { error } = await client
+            .from('schedules')
+            .insert(payload);
+
+          if (error) {
+            let detail = error.message || 'Kesalahan tidak diketahui';
+
+            if (/duplicate key|unique constraint/i.test(detail)) {
+              detail = 'Petugas sudah memiliki jadwal pada tanggal tersebut';
+            } else if (/row-level security|permission denied/i.test(detail)) {
+              detail = 'Akun tidak memiliki izin menyimpan jadwal ini';
+            }
+
+            failures.push(`Baris ${excelRow}: ${detail}`);
+          } else {
+            success++;
+          }
+        }
+
+        $('importPreview').innerHTML = `
+          <div class="notice">
+            Impor selesai. Berhasil disimpan: ${success}.
+            Gagal disimpan: ${failures.length}.
+          </div>
+          ${failures.length
+            ? `<div class="notice warn">${failures.map(esc).join('<br>')}</div>`
+            : ''}
+          <button type="button" id="backToSchedule">Lihat Jadwal</button>
+        `;
+
+        message('Proses impor selesai.');
+
+        $('backToSchedule').addEventListener('click', () => setPage('home'));
+      });
+
+    } catch (err) {
+      message('File belum dapat diperiksa: ' + (err.message || 'Kesalahan tidak diketahui'), true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Periksa File';
+    }
+  });
+}
+
+
+async function renderRekap() {
+  const c = $('dashboardContent');
+
+  c.innerHTML = '<div class="loading">Memuat rekap kegiatan...</div>';
+
+  let selectedStaffId = null;
+
+  try {
+    allSchedules = await getScheduleData();
+
+    const now = new Date();
+    const monthNames = [
+      'Januari','Februari','Maret','April',
+      'Mei','Juni','Juli','Agustus',
+      'September','Oktober','November','Desember'
+    ];
+
+    const years = [];
+    for (let y = 2026; y <= Math.max(2032, now.getFullYear() + 2); y++) {
+      years.push(y);
+    }
+
+    c.innerHTML = `
+      <section class="panel">
+        <h3>Rekap Kegiatan Petugas</h3>
+
+        <div class="filters">
+          <div>
+            <label for="rekapMonth">Bulan</label>
+            <select id="rekapMonth">
+              ${monthNames.map((m, i) => `
+                <option value="${i + 1}"
+                  ${i + 1 === now.getMonth() + 1 ? 'selected' : ''}>
+                  ${m}
+                </option>
+              `).join('')}
+            </select>
+          </div>
+
+          <div>
+            <label for="rekapYear">Tahun</label>
+            <select id="rekapYear">
+              ${years.map(y => `
+                <option value="${y}"
+                  ${y === now.getFullYear() ? 'selected' : ''}>
+                  ${y}
+                </option>
+              `).join('')}
+            </select>
+          </div>
+        </div>
+
+        <button type="button" id="applyRekapFilter"
+          style="width:100%;margin-top:15px">
+          Terapkan Filter
+        </button>
+
+        <hr style="margin:24px 0;border:0;border-top:1px solid var(--border,#e5e7eb)">
+
+        <div id="rekapList"></div>
+        <div id="rekapDetail"></div>
+      </section>
+    `;
+
+    function getFilteredSchedules() {
+      const month = Number($('rekapMonth').value);
+      const year = $('rekapYear').value;
+
+      return allSchedules.filter(x =>
+        Number(x.activity_date.slice(5, 7)) === month &&
+        x.activity_date.startsWith(year)
+      );
+    }
+
+    function drawRekapList() {
+      selectedStaffId = null;
+
+      const schedules = getFilteredSchedules();
+      const groups = {};
+
+      schedules.forEach(x => {
+        if (!groups[x.staff_id]) {
+          groups[x.staff_id] = {
+            id: x.staff_id,
+            name: x.staff_name,
+            schedules: []
+          };
+        }
+
+        groups[x.staff_id].schedules.push(x);
+      });
+
+      const rows = Object.values(groups).sort((a, b) =>
+        b.schedules.length - a.schedules.length ||
+        a.name.localeCompare(b.name)
+      );
+
+      $('rekapDetail').innerHTML = '';
+
+      $('rekapList').innerHTML = `
+        <h3>Rekapitulasi Petugas</h3>
+
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>No</th>
+                <th>Nama Petugas</th>
+                <th>Jumlah</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              ${rows.map((x, i) => `
+                <tr>
+                  <td>${i + 1}</td>
+                  <td>${esc(x.name)}</td>
+                  <td style="text-align:center">
+                    <strong>${x.schedules.length}</strong>
+                  </td>
+                  <td style="text-align:center">
+                    <button type="button"
+                      class="small-btn"
+                      data-rekap-detail="${esc(x.id)}">
+                      Detail
+                    </button>
+                  </td>
+                </tr>
+              `).join('') || `
+                <tr>
+                  <td colspan="4" class="empty-cell">
+                    Belum ada kegiatan pada periode ini.
+                  </td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      $('rekapList').querySelectorAll('[data-rekap-detail]')
+        .forEach(btn => {
+          btn.addEventListener('click', () => {
+            drawRekapDetail(btn.dataset.rekapDetail);
+          });
+        });
+    }
+
+    function drawRekapDetail(staffId) {
+      selectedStaffId = staffId;
+
+      const schedules = getFilteredSchedules()
+        .filter(x => x.staff_id === staffId)
+        .sort((a, b) =>
+          a.activity_date.localeCompare(b.activity_date)
+        );
+
+      if (!schedules.length) return;
+
+      const staffName = schedules[0].staff_name;
+      const differentDates = new Set(
+        schedules.map(x => x.activity_date)
+      ).size;
+
+      const month = Number($('rekapMonth').value);
+      const year = $('rekapYear').value;
+
+      $('rekapList').innerHTML = '';
+
+      $('rekapDetail').innerHTML = `
+        <div class="panel-head">
+          <h3>Detail Kegiatan Petugas</h3>
+          <span class="badge">
+            ${monthNames[month - 1]} ${year}
+          </span>
+        </div>
+
+        <p class="muted">Nama Petugas</p>
+        <h3>${esc(staffName)}</h3>
+
+        <div class="stats">
+          <div class="stat">
+            <div>
+              <strong style="color:#087f5b">
+                ${schedules.length}
+              </strong>
+              <div class="stat-top">Total kegiatan</div>
+            </div>
+          </div>
+
+          <div class="stat">
+            <div>
+              <strong>${differentDates}</strong>
+              <div class="stat-top">Tanggal berbeda</div>
+            </div>
+          </div>
+        </div>
+
+        <h3>Daftar Kegiatan</h3>
+
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Tanggal</th>
+                <th>Program</th>
+                <th>Tempat</th>
+                <th>Catatan</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              ${schedules.map(x => `
+                <tr>
+                  <td>${new Date(
+                    x.activity_date + 'T12:00:00'
+                  ).toLocaleDateString('id-ID', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric'
+                  })}</td>
+                  <td>${esc(x.program_name)}</td>
+                  <td>${esc(x.place_name)}</td>
+                  <td>${esc(x.notes || '-')}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="secondary"
+            id="backRekap">
+            ← Kembali ke Rekap
+          </button>
+        </div>
+      `;
+
+      $('backRekap').addEventListener('click', drawRekapList);
+    }
+
+    $('applyRekapFilter').addEventListener('click', drawRekapList);
+
+    drawRekapList();
+
+  } catch (e) {
+    c.innerHTML = `
+      <section class="panel">
+        <h3>Rekap gagal dimuat</h3>
+        <div class="notice warn">
+          ${esc(e.message || 'Periksa koneksi Supabase.')}
+        </div>
+        <button type="button" id="retryRekap">
+          Coba Lagi
+        </button>
+      </section>
+    `;
+
+    $('retryRekap').addEventListener('click', renderRekap);
+  }
+}
+
+function renderPage(page){if(page==='home')return renderHome();if (page === 'rekap') return renderRekap();if(page==='input')return renderInput();if (page === 'import') return renderImport();if(page==='program')return renderMaster('programs');if(page==='staff')return renderMaster('staff');if(page==='places')return renderMaster('places');if(page==='calendar')return renderCalendar();if (page === 'accounts') return renderAccounts();if(page==='settings')return renderSettings()}
+client.auth.onAuthStateChange((_event,session)=>{showSession(session)});client.auth.getSession().then(({data,error})=>{if(error){$('message').textContent='Sesi tidak dapat diperiksa. Muat ulang halaman.';return}showSession(data.session)});
