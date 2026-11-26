@@ -30,3 +30,26 @@ body{margin:0;min-height:100vh;font-family:Arial,Helvetica,sans-serif;color:var(
 /* Pengelolaan data master */
 .master-toolbar{display:grid;grid-template-columns:minmax(180px,1fr) auto;gap:10px;align-items:end;margin:0 0 16px}.master-toolbar label{margin-top:0}.master-editor{border:1px solid #b7e2d0;background:#f7fcf9;border-radius:12px;padding:16px;margin:0 0 16px}.row-actions{display:flex;gap:6px;flex-wrap:wrap}.small-btn{padding:7px 9px;font-size:12px;background:#e8f5ef;color:#056448}.danger-btn{background:#feeceb;color:#b42318}.page-count{align-self:center;white-space:nowrap}.empty-cell{text-align:center!important;color:var(--muted);padding:24px!important}
 @media(max-width:650px){.master-toolbar{grid-template-columns:1fr}.row-actions{min-width:145px}}
+#exportHomeExcel {
+  background: #087f5b;
+  color: white;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+#exportHomeExcel:hover {
+  background: #056448;
+}
+
+@media(max-width:650px) {
+  .panel-head {
+    flex-wrap: wrap;
+  }
+
+  #exportHomeExcel {
+    font-size: 12px;
+    padding: 10px 12px;
+  }
+}
