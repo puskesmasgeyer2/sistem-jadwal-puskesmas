@@ -327,7 +327,19 @@ async function getScheduleData() {
   }));
 }
 
-async function renderHome(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat jadwal...</div>';try{await loadMasters();allSchedules=await getScheduleData();const now=new Date();const month=String(now.getMonth()+1).padStart(2,'0');const prefix=now.getFullYear()+'-'+month;const thisMonth=allSchedules.filter(x=>x.activity_date.startsWith(prefix)).length;const staffCount=masterCache.staff.length;const programCount=masterCache.programs.length;c.innerHTML=`<div class="welcome-row"><div><h3>Selamat datang, ${esc(currentProfile?.full_name||'Pengguna')} 👋</h3><p>Kelola jadwal kegiatan Puskesmas dalam satu tempat.</p></div><button type="button" id="quickAdd">＋ Input Jadwal</button></div><div class="stats"><div class="stat"><div><div class="stat-top">Total jadwal valid</div><strong>${allSchedules.length}</strong></div><span class="stat-icon">▤</span></div><div class="stat"><div><div class="stat-top">Jadwal bulan ini</div><strong>${thisMonth}</strong></div><span class="stat-icon">▦</span></div><div class="stat"><div><div class="stat-top">Petugas aktif</div><strong>${staffCount}</strong></div><span class="stat-icon">♙</span></div></div><section class="panel"><div class="panel-head"><h3>Daftar Jadwal Kegiatan</h3><span class="badge">${programCount} program aktif</span></div>${monthYearFilters()}<div id="homeTable"></div><div class="pagination" id="homePagination"></div></section><div class="page-foot">Sistem Jadwal UPTD Puskesmas Geyer 2</div>`;$('quickAdd').addEventListener('click',()=>setPage('input'));$('applyFilters').addEventListener('click',()=>{currentPageNumber=1;drawHomeTable()});['filterMonth','filterYear'].forEach(id=>$(id).addEventListener('change',()=>{currentPageNumber=1;drawHomeTable()}));$('filterSearch').addEventListener('input',()=>{currentPageNumber=1;drawHomeTable()});drawHomeTable()}catch(e){c.innerHTML=`<div class="panel"><h3>Jadwal belum dapat dimuat</h3><p class="muted">Periksa izin baca tabel schedules dan tabel data master di Supabase.</p><div class="notice warn">Detail: ${esc(e.message||'Kesalahan tidak diketahui')}</div><button id="retryHome">Coba lagi</button></div>`;$('retryHome').addEventListener('click',renderHome)}}
+async function renderHome(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat jadwal...</div>';try{await loadMasters();allSchedules=await getScheduleData();const now=new Date();const month=String(now.getMonth()+1).padStart(2,'0');const prefix=now.getFullYear()+'-'+month;const thisMonth=allSchedules.filter(x=>x.activity_date.startsWith(prefix)).length;const staffCount=masterCache.staff.length;const programCount=masterCache.programs.length;c.innerHTML=`<div class="welcome-row"><div><h3>Selamat datang, ${esc(currentProfile?.full_name||'Pengguna')} 👋</h3><p>Kelola jadwal kegiatan Puskesmas dalam satu tempat.</p></div><button type="button" id="quickAdd">＋ Input Jadwal</button></div><div class="stats"><div class="stat"><div><div class="stat-top">Total jadwal valid</div><strong>${allSchedules.length}</strong></div><span class="stat-icon">▤</span></div><div class="stat"><div><div class="stat-top">Jadwal bulan ini</div><strong>${thisMonth}</strong></div><span class="stat-icon">▦</span></div><div class="stat"><div><div class="stat-top">Petugas aktif</div><strong>${staffCount}</strong></div><span class="stat-icon">♙</span></div></div><section class="panel"><div class="panel-head">
+  <h3>Daftar Jadwal Kegiatan</h3>
+  <div class="row-actions" style="align-items:center">
+    <span class="badge">${programCount} program aktif</span>
+    <button type="button" id="exportHomeExcel"
+      style="background:#087f5b">
+      <span>⇩</span> Export Excel
+    </button>
+  </div>
+</div>${monthYearFilters()}<div id="homeTable"></div><div class="pagination" id="homePagination"></div></section><div class="page-foot">Sistem Jadwal UPTD Puskesmas Geyer 2</div>`;$('quickAdd').addEventListener('click',()=>setPage('input'));$('exportHomeExcel').addEventListener(
+  'click',
+  exportFilteredSchedules
+);$('applyFilters').addEventListener('click',()=>{currentPageNumber=1;drawHomeTable()});['filterMonth','filterYear'].forEach(id=>$(id).addEventListener('change',()=>{currentPageNumber=1;drawHomeTable()}));$('filterSearch').addEventListener('input',()=>{currentPageNumber=1;drawHomeTable()});drawHomeTable()}catch(e){c.innerHTML=`<div class="panel"><h3>Jadwal belum dapat dimuat</h3><p class="muted">Periksa izin baca tabel schedules dan tabel data master di Supabase.</p><div class="notice warn">Detail: ${esc(e.message||'Kesalahan tidak diketahui')}</div><button id="retryHome">Coba lagi</button></div>`;$('retryHome').addEventListener('click',renderHome)}}
 
 function openScheduleEditor(item) {
   const c = $('dashboardContent');
@@ -611,6 +623,132 @@ function drawHomeTable() {
         msg('Jadwal berhasil dihapus.');
       });
     });
+}
+
+function exportFilteredSchedules() {
+  if (typeof XLSX === 'undefined') {
+    alert('Library Excel belum berhasil dimuat.');
+    return;
+  }
+
+  const month = $('filterMonth')?.value || 'all';
+  const year = $('filterYear')?.value || 'all';
+  const dateStart = $('filterDateStart')?.value || '';
+  const dateEnd = $('filterDateEnd')?.value || '';
+
+  const q = ($('filterSearch')?.value || '')
+    .trim()
+    .toLowerCase();
+
+  // Validasi tanggal
+  if (dateStart && dateEnd && dateStart > dateEnd) {
+    alert('Tanggal mulai tidak boleh melebihi tanggal akhir.');
+    return;
+  }
+
+  const useDateRange = Boolean(dateStart || dateEnd);
+
+  // Ambil seluruh data sesuai filter,
+  // bukan hanya data pada halaman yang sedang tampil.
+  const rows = allSchedules.filter(x => {
+    const date = x.activity_date;
+
+    const matchDate = useDateRange
+      ? (
+          (!dateStart || date >= dateStart) &&
+          (!dateEnd || date <= dateEnd)
+        )
+      : (
+          (month === 'all' ||
+            Number(date.slice(5, 7)) === Number(month)) &&
+          (year === 'all' ||
+            date.startsWith(year))
+        );
+
+    const matchSearch = [
+      x.program_name,
+      x.staff_name,
+      x.place_name,
+      x.notes
+    ].some(v =>
+      String(v || '').toLowerCase().includes(q)
+    );
+
+    return matchDate && matchSearch;
+  });
+
+  if (!rows.length) {
+    alert('Tidak ada jadwal yang dapat diekspor.');
+    return;
+  }
+
+  // Susun data Excel
+  const excelData = rows.map((x, index) => ({
+    'No': index + 1,
+    'Tanggal': x.activity_date,
+    'Hari': new Date(
+      x.activity_date + 'T12:00:00'
+    ).toLocaleDateString('id-ID', {
+      weekday: 'long',
+      timeZone: 'Asia/Jakarta'
+    }),
+    'Program': x.program_name,
+    'Petugas': x.staff_name,
+    'Tempat': x.place_name,
+    'Catatan': x.notes || '-',
+    'Status': 'Valid'
+  }));
+
+  // Buat workbook
+  const worksheet = XLSX.utils.json_to_sheet(excelData);
+
+  // Atur lebar kolom
+  worksheet['!cols'] = [
+    { wch: 6 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 42 },
+    { wch: 32 },
+    { wch: 25 },
+    { wch: 35 },
+    { wch: 12 }
+  ];
+
+  // Aktifkan filter pada header Excel
+  worksheet['!autofilter'] = {
+    ref: `A1:H${excelData.length + 1}`
+  };
+
+  // Bekukan baris judul
+  worksheet['!freeze'] = {
+    xSplit: 0,
+    ySplit: 1
+  };
+
+  const workbook = XLSX.utils.book_new();
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    worksheet,
+    'Daftar Jadwal'
+  );
+
+  // Nama file berdasarkan tanggal ekspor
+  const today = new Date();
+  const dateCode = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, '0'),
+    String(today.getDate()).padStart(2, '0')
+  ].join('-');
+
+  const filename =
+    `Jadwal_Kegiatan_Geyer_2_${dateCode}.xlsx`;
+
+  XLSX.writeFile(workbook, filename);
+
+  msg(
+    `Berhasil mengekspor ${rows.length} jadwal ke Excel.`
+  );
 }
 
 async function renderInput(){const c=$('dashboardContent');c.innerHTML='<div class="loading">Memuat pilihan formulir...</div>';try{await loadMasters();const isPetugas=currentProfile?.role==='petugas';if(isPetugas&&!currentProfile.staff_id){c.innerHTML='<div class="panel"><h3>Akun belum terhubung ke petugas</h3><p class="muted">Hubungi administrator untuk mengisi staff_id pada profil akun.</p></div>';return}const opt=(arr,label,value,extra=()=> '')=>arr.map(x=>`<option value="${esc(x[value])}">${esc(label(x))}${extra(x)}</option>`).join('');c.innerHTML=`<div class="welcome-row"><div><h3>Input Jadwal Kegiatan</h3><p>Lengkapi informasi kegiatan. Sistem akan memeriksa kebijakan kalender dan bentrok petugas.</p></div></div><section class="panel"><form id="scheduleForm"><div class="form-grid"><div><label for="activityDate">Tanggal kegiatan *</label><input id="activityDate" type="date" required></div><div><label for="programId">Program kegiatan *</label><select id="programId" required><option value="">Pilih program</option>${opt(masterCache.programs,x=>x.program_name,'id',x=>x.program_code?' — '+x.program_code:'')}</select></div><div><label for="staffId">Nama petugas *</label><select id="staffId" required ${isPetugas?'disabled':''}><option value="">Pilih petugas</option>${opt(masterCache.staff.filter(x=>!isPetugas||x.id===currentProfile.staff_id),x=>x.full_name,'id',x=>x.employee_code?' — '+x.employee_code:'')}</select></div><div><label for="placeId">Tempat kegiatan *</label><select id="placeId" required><option value="">Pilih tempat</option>${opt(masterCache.places,x=>x.place_name,'id')}</select></div><div class="full"><label for="scheduleNotes">Catatan (opsional)</label><textarea id="scheduleNotes" rows="3" maxlength="500" placeholder="Keterangan tambahan"></textarea></div></div><div class="notice warn">Hari Minggu dan tanggal dengan kebijakan blokir tidak dapat dipilih. Hari Sabtu atau tanggal peringatan memerlukan konfirmasi.</div><div id="scheduleFormMessage" role="status" aria-live="polite"></div><div class="form-actions"><button type="button" class="secondary" id="cancelInput">Batal</button><button type="submit" id="saveScheduleButton">Simpan Jadwal</button></div></form></section>`;if(isPetugas)$('staffId').value=currentProfile.staff_id;$('cancelInput').addEventListener('click',()=>setPage('home'));$('scheduleForm').addEventListener('submit',saveSchedule)}catch(e){c.innerHTML=`<div class="panel"><h3>Formulir belum dapat dimuat</h3><div class="notice warn">${esc(e.message||'Periksa izin data master.')}</div></div>`}}
